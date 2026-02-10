@@ -12,6 +12,7 @@ The MainWindow is the central application window containing:
 from pathlib import Path
 from typing import Optional, List
 import os
+import logging
 
 from PySide6.QtCore import Qt, Signal, Slot, QSettings
 from PySide6.QtWidgets import (
@@ -33,6 +34,9 @@ from pyxschem.io import read_schematic, write_schematic
 from pyxschem.ui.menubar import MenuBarSetup
 from pyxschem.ui.toolbar import ToolBarSetup
 from pyxschem.ui.statusbar import StatusBarSetup
+
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -90,6 +94,7 @@ class MainWindow(QMainWindow):
 
         # Create new empty schematic
         self.new_schematic()
+        logger.info("MainWindow initialized (dark_scheme=%s, show_grid=%s)", self._dark_scheme, self._show_grid)
 
     def _setup_layer_manager(self) -> None:
         """Initialize the layer manager."""
@@ -128,10 +133,12 @@ class MainWindow(QMainWindow):
         # - Hierarchy browser
         # - Property panel
         # - Library browser
+        logger.debug("Dock widgets setup placeholder invoked")
         pass
 
     def _connect_signals(self) -> None:
         """Connect internal signals."""
+        logger.debug("Internal signal wiring placeholder invoked")
         pass
 
     def _load_settings(self) -> None:
@@ -157,6 +164,13 @@ class MainWindow(QMainWindow):
         # Grid settings
         self._show_grid = self._settings.value("showGrid", True, type=bool)
         self._snap_to_grid = self._settings.value("snapToGrid", True, type=bool)
+        logger.info(
+            "Settings loaded (recent_files=%d, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            len(self._recent_files),
+            self._dark_scheme,
+            self._show_grid,
+            self._snap_to_grid,
+        )
 
     def _save_settings(self) -> None:
         """Save application settings."""
@@ -166,6 +180,13 @@ class MainWindow(QMainWindow):
         self._settings.setValue("darkScheme", self._dark_scheme)
         self._settings.setValue("showGrid", self._show_grid)
         self._settings.setValue("snapToGrid", self._snap_to_grid)
+        logger.info(
+            "Settings saved (recent_files=%d, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            len(self._recent_files),
+            self._dark_scheme,
+            self._show_grid,
+            self._snap_to_grid,
+        )
 
     # -------------------------------------------------------------------------
     # Properties
@@ -206,6 +227,7 @@ class MainWindow(QMainWindow):
         """Create a new empty schematic."""
         context = SchematicContext()
         self._add_schematic_tab(context, "Untitled")
+        logger.info("Created new schematic tab")
 
     @Slot()
     def new_symbol(self) -> None:
@@ -213,6 +235,7 @@ class MainWindow(QMainWindow):
         context = SchematicContext()
         context.current_name = "untitled.sym"
         self._add_schematic_tab(context, "Untitled.sym")
+        logger.info("Created new symbol tab")
 
     def _add_schematic_tab(self, context: SchematicContext, title: str) -> int:
         """Add a new tab with a schematic canvas."""
@@ -235,6 +258,7 @@ class MainWindow(QMainWindow):
         self._context = context
         self.schematic_changed.emit(context)
         self._update_window_title()
+        logger.info("Added tab index=%d title='%s' file='%s'", idx, title, context.current_name or "untitled")
 
         return idx
 
@@ -260,18 +284,21 @@ class MainWindow(QMainWindow):
                 return False
             file_path = Path(file_path)
 
+        logger.info("Opening file '%s'", file_path)
         if not file_path.exists():
             QMessageBox.warning(
                 self,
                 "File Not Found",
                 f"The file '{file_path}' does not exist."
             )
+            logger.warning("Open failed: file not found '%s'", file_path)
             return False
 
         try:
             context = read_schematic(str(file_path))
             self._add_schematic_tab(context, file_path.name)
             self._add_recent_file(str(file_path))
+            logger.info("Opened file '%s' successfully", file_path)
             return True
         except Exception as e:
             QMessageBox.critical(
@@ -279,6 +306,7 @@ class MainWindow(QMainWindow):
                 "Error Opening File",
                 f"Failed to open '{file_path}':\n{e}"
             )
+            logger.exception("Failed to open file '%s'", file_path)
             return False
 
     @Slot()
@@ -295,11 +323,13 @@ class MainWindow(QMainWindow):
             new_window = MainWindow()
             new_window.open_file(Path(file_path))
             new_window.show()
+            logger.info("Opened file '%s' in new window", file_path)
 
     @Slot()
     def save_file(self) -> bool:
         """Save the current schematic."""
         if not self._context:
+            logger.warning("Save requested with no active context")
             return False
 
         if not self._context.current_name or self._context.current_name.startswith("untitled"):
@@ -311,6 +341,7 @@ class MainWindow(QMainWindow):
     def save_file_as(self) -> bool:
         """Save the current schematic with a new name."""
         if not self._context:
+            logger.warning("Save As requested with no active context")
             return False
 
         suffix = ".sym" if self._context.is_symbol else ".sch"
@@ -335,6 +366,7 @@ class MainWindow(QMainWindow):
     def _save_to_file(self, file_path: str) -> bool:
         """Save schematic to a specific file."""
         if not self._context:
+            logger.warning("Save to '%s' requested with no active context", file_path)
             return False
 
         try:
@@ -344,6 +376,7 @@ class MainWindow(QMainWindow):
             self._update_tab_title()
             self._update_window_title()
             self._add_recent_file(file_path)
+            logger.info("Saved file '%s' successfully", file_path)
             return True
         except Exception as e:
             QMessageBox.critical(
@@ -351,12 +384,14 @@ class MainWindow(QMainWindow):
                 "Error Saving File",
                 f"Failed to save '{file_path}':\n{e}"
             )
+            logger.exception("Failed to save file '%s'", file_path)
             return False
 
     @Slot()
     def reload_file(self) -> None:
         """Reload the current file from disk."""
         if not self._context or not self._context.current_name:
+            logger.warning("Reload requested without a file-backed context")
             return
 
         if self._context.modified:
@@ -367,6 +402,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.Yes | QMessageBox.No
             )
             if result != QMessageBox.Yes:
+                logger.info("Reload canceled by user for '%s'", self._context.current_name)
                 return
 
         try:
@@ -382,12 +418,14 @@ class MainWindow(QMainWindow):
             self._context = new_context
             self.schematic_changed.emit(new_context)
             self._update_window_title()
+            logger.info("Reloaded file '%s' successfully", file_path)
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "Error Reloading File",
                 f"Failed to reload file:\n{e}"
             )
+            logger.exception("Failed to reload file '%s'", self._context.current_name if self._context else "")
 
     def _add_recent_file(self, file_path: str) -> None:
         """Add a file to the recent files list."""
@@ -396,6 +434,7 @@ class MainWindow(QMainWindow):
         self._recent_files.insert(0, file_path)
         self._recent_files = self._recent_files[:self.MAX_RECENT_FILES]
         self._menu_setup.update_recent_files_menu()
+        logger.debug("Updated recent files list (count=%d)", len(self._recent_files))
 
     def open_recent_file(self, file_path: str) -> None:
         """Open a file from the recent files list."""
@@ -435,6 +474,7 @@ class MainWindow(QMainWindow):
         self._show_grid = not self._show_grid
         if self.canvas:
             self.canvas.show_grid = self._show_grid
+        logger.info("Grid visibility toggled -> %s", self._show_grid)
 
     @Slot()
     def toggle_color_scheme(self) -> None:
@@ -449,12 +489,14 @@ class MainWindow(QMainWindow):
                 canvas.set_dark_scheme(self._dark_scheme)
                 if hasattr(canvas, '_renderer'):
                     canvas._renderer.render()
+        logger.info("Color scheme toggled -> %s", "dark" if self._dark_scheme else "light")
 
     @Slot()
     def redraw(self) -> None:
         """Force a redraw of the current schematic."""
         if self.renderer:
             self.renderer.render()
+            logger.debug("Redraw requested for active tab")
 
     # -------------------------------------------------------------------------
     # Edit Operations
@@ -464,12 +506,14 @@ class MainWindow(QMainWindow):
     def undo(self) -> None:
         """Undo the last operation."""
         # TODO: Implement undo stack
+        logger.warning("Undo requested but not implemented")
         self.statusBar().showMessage("Undo not yet implemented", 2000)
 
     @Slot()
     def redo(self) -> None:
         """Redo the last undone operation."""
         # TODO: Implement redo
+        logger.warning("Redo requested but not implemented")
         self.statusBar().showMessage("Redo not yet implemented", 2000)
 
     @Slot()
@@ -482,24 +526,28 @@ class MainWindow(QMainWindow):
     def copy(self) -> None:
         """Copy selected objects to clipboard."""
         # TODO: Implement clipboard
+        logger.warning("Copy requested but not implemented in MainWindow")
         self.statusBar().showMessage("Copy not yet implemented", 2000)
 
     @Slot()
     def paste(self) -> None:
         """Paste objects from clipboard."""
         # TODO: Implement paste
+        logger.warning("Paste requested but not implemented in MainWindow")
         self.statusBar().showMessage("Paste not yet implemented", 2000)
 
     @Slot()
     def delete_selected(self) -> None:
         """Delete selected objects."""
         # TODO: Implement delete
+        logger.warning("Delete requested but not implemented in MainWindow")
         self.statusBar().showMessage("Delete not yet implemented", 2000)
 
     @Slot()
     def select_all(self) -> None:
         """Select all objects."""
         # TODO: Implement select all
+        logger.warning("Select All requested but not implemented in MainWindow")
         self.statusBar().showMessage("Select all not yet implemented", 2000)
 
     @Slot()
@@ -513,29 +561,34 @@ class MainWindow(QMainWindow):
         """Duplicate selected objects."""
         if self._context:
             self._context.ui_state = UIState.STARTCOPY
+            logger.info("UI state set to STARTCOPY")
 
     @Slot()
     def move_selected(self) -> None:
         """Start moving selected objects."""
         if self._context:
             self._context.ui_state = UIState.STARTMOVE
+            logger.info("UI state set to STARTMOVE")
 
     @Slot()
     def rotate_selected(self) -> None:
         """Rotate selected objects 90 degrees."""
         # TODO: Implement rotation
+        logger.warning("Rotate requested but not implemented in MainWindow")
         self.statusBar().showMessage("Rotate not yet implemented", 2000)
 
     @Slot()
     def flip_horizontal(self) -> None:
         """Flip selected objects horizontally."""
         # TODO: Implement flip
+        logger.warning("Flip horizontal requested but not implemented in MainWindow")
         self.statusBar().showMessage("Flip horizontal not yet implemented", 2000)
 
     @Slot()
     def flip_vertical(self) -> None:
         """Flip selected objects vertically."""
         # TODO: Implement flip
+        logger.warning("Flip vertical requested but not implemented in MainWindow")
         self.statusBar().showMessage("Flip vertical not yet implemented", 2000)
 
     # -------------------------------------------------------------------------
@@ -548,6 +601,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTWIRE
             self.statusBar().showMessage("Click to start wire, click to add points, double-click to finish")
+            logger.info("UI state set to STARTWIRE")
 
     @Slot()
     def start_line(self) -> None:
@@ -555,6 +609,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTLINE
             self.statusBar().showMessage("Click to start line, click to end")
+            logger.info("UI state set to STARTLINE")
 
     @Slot()
     def start_rect(self) -> None:
@@ -562,6 +617,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTRECT
             self.statusBar().showMessage("Click to start rectangle, click to set opposite corner")
+            logger.info("UI state set to STARTRECT")
 
     @Slot()
     def start_arc(self) -> None:
@@ -569,6 +625,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTARC
             self.statusBar().showMessage("Click to set center, drag to set radius")
+            logger.info("UI state set to STARTARC")
 
     @Slot()
     def start_polygon(self) -> None:
@@ -576,6 +633,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTPOLYGON
             self.statusBar().showMessage("Click to add points, double-click to finish")
+            logger.info("UI state set to STARTPOLYGON")
 
     @Slot()
     def start_text(self) -> None:
@@ -583,6 +641,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.PLACE_TEXT
             self.statusBar().showMessage("Click to place text")
+            logger.info("UI state set to PLACE_TEXT")
 
     @Slot()
     def place_symbol(self) -> None:
@@ -596,6 +655,7 @@ class MainWindow(QMainWindow):
                 self._context.ui_state = UIState.PLACE_SYMBOL
                 # TODO: Load symbol and start placement
                 self.statusBar().showMessage(f"Click to place {symbol_path}")
+                logger.info("Symbol selected for placement: %s", symbol_path)
 
     # -------------------------------------------------------------------------
     # Properties
@@ -610,6 +670,7 @@ class MainWindow(QMainWindow):
         dialog = PropertyEditorDialog(self)
         if dialog.exec():
             # TODO: Apply changes
+            logger.warning("Property edit accepted but apply path is not implemented")
             pass
 
     @Slot()
@@ -618,6 +679,7 @@ class MainWindow(QMainWindow):
         from pyxschem.ui.dialogs import PropertyEditorDialog
 
         if not self._context:
+            logger.warning("Edit schematic properties requested without active context")
             return
 
         dialog = PropertyEditorDialog(self, self._context.schprop or "")
@@ -625,6 +687,7 @@ class MainWindow(QMainWindow):
             self._context.schprop = dialog.text
             self._context.modified = True
             self._update_tab_title()
+            logger.info("Updated schematic properties for '%s'", self._context.current_name or "untitled")
 
     # -------------------------------------------------------------------------
     # Hierarchy Navigation
@@ -634,12 +697,14 @@ class MainWindow(QMainWindow):
     def descend_schematic(self) -> None:
         """Descend into selected instance's schematic."""
         # TODO: Implement hierarchy navigation
+        logger.warning("Descend schematic requested but not implemented")
         self.statusBar().showMessage("Descend not yet implemented", 2000)
 
     @Slot()
     def descend_symbol(self) -> None:
         """Descend into selected instance's symbol."""
         # TODO: Implement hierarchy navigation
+        logger.warning("Descend symbol requested but not implemented")
         self.statusBar().showMessage("Descend symbol not yet implemented", 2000)
 
     @Slot()
@@ -648,8 +713,10 @@ class MainWindow(QMainWindow):
         if self._context and self._context.pop_hierarchy():
             # TODO: Reload parent schematic
             self._update_window_title()
+            logger.info("Hierarchy pop successful; depth=%d", self._context.hierarchy_depth)
         else:
             self.statusBar().showMessage("Already at top level", 2000)
+            logger.info("Hierarchy pop requested at top level")
 
     # -------------------------------------------------------------------------
     # Netlisting
@@ -659,6 +726,7 @@ class MainWindow(QMainWindow):
     def generate_netlist(self) -> None:
         """Generate netlist for current schematic."""
         # TODO: Implement netlisting
+        logger.warning("Netlist generation requested but not implemented")
         self.statusBar().showMessage("Netlist generation not yet implemented", 2000)
 
     @Slot()
@@ -666,18 +734,21 @@ class MainWindow(QMainWindow):
         """Set netlist type to SPICE."""
         self._netlist_type = NetlistType.SPICE
         self.statusBar().showMessage("Netlist type: SPICE", 2000)
+        logger.info("Netlist type set to SPICE")
 
     @Slot()
     def set_netlist_type_verilog(self) -> None:
         """Set netlist type to Verilog."""
         self._netlist_type = NetlistType.VERILOG
         self.statusBar().showMessage("Netlist type: Verilog", 2000)
+        logger.info("Netlist type set to VERILOG")
 
     @Slot()
     def set_netlist_type_vhdl(self) -> None:
         """Set netlist type to VHDL."""
         self._netlist_type = NetlistType.VHDL
         self.statusBar().showMessage("Netlist type: VHDL", 2000)
+        logger.info("Netlist type set to VHDL")
 
     # -------------------------------------------------------------------------
     # Tab Management
@@ -685,6 +756,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_close_requested(self, index: int) -> None:
         """Handle tab close request."""
+        logger.info("Tab close requested for index %d", index)
         canvas = self._tab_widget.widget(index)
         if isinstance(canvas, SchematicCanvas) and hasattr(canvas, '_renderer'):
             context = canvas._renderer.context
@@ -699,9 +771,11 @@ class MainWindow(QMainWindow):
                 if result == QMessageBox.Save:
                     self._save_to_file(context.current_name)
                 elif result == QMessageBox.Cancel:
+                    logger.info("Tab close canceled by user for '%s'", context.filename)
                     return
 
         self._tab_widget.removeTab(index)
+        logger.info("Closed tab index %d", index)
 
         # Create new tab if all tabs closed
         if self._tab_widget.count() == 0:
@@ -717,6 +791,7 @@ class MainWindow(QMainWindow):
             self._context = canvas._renderer.context
             self.schematic_changed.emit(self._context)
             self._update_window_title()
+            logger.info("Active tab changed to index %d", index)
 
     def _update_tab_title(self) -> None:
         """Update the current tab's title."""
@@ -755,6 +830,7 @@ class MainWindow(QMainWindow):
         """Handle selection change from canvas."""
         # TODO: Update property panel
         self.selection_changed.emit([])
+        logger.debug("Selection changed in canvas")
 
     # -------------------------------------------------------------------------
     # Event Handlers
@@ -762,6 +838,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event."""
+        logger.info("Window close requested")
         # Check for unsaved changes in all tabs
         for i in range(self._tab_widget.count()):
             canvas = self._tab_widget.widget(i)
@@ -779,13 +856,16 @@ class MainWindow(QMainWindow):
                         self._tab_widget.setCurrentIndex(i)
                         if not self.save_file():
                             event.ignore()
+                            logger.warning("Close canceled due to failed save in tab %d", i)
                             return
                     elif result == QMessageBox.Cancel:
                         event.ignore()
+                        logger.info("Close canceled by user")
                         return
 
         self._save_settings()
         event.accept()
+        logger.info("Window close accepted")
 
     def keyPressEvent(self, event) -> None:
         """Handle key press events."""
@@ -799,6 +879,7 @@ class MainWindow(QMainWindow):
             self.deselect_all()
             self.statusBar().clearMessage()
             event.accept()
+            logger.debug("Escape pressed: cleared UI state and selection")
             return
 
         super().keyPressEvent(event)

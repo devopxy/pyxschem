@@ -17,6 +17,7 @@ between mouse events and the schematic context.
 from enum import Enum, auto
 from typing import Optional, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
+import logging
 
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QPen, QColor
@@ -25,6 +26,9 @@ from PySide6.QtWidgets import QGraphicsLineItem, QGraphicsRectItem, QGraphicsEll
 if TYPE_CHECKING:
     from pyxschem.core.context import SchematicContext
     from pyxschem.graphics import SchematicCanvas, SchematicRenderer
+
+
+logger = logging.getLogger(__name__)
 
 
 class DrawingMode(Enum):
@@ -83,6 +87,7 @@ class DrawingController:
         self._renderer = renderer
         self._context = context
         self._state = DrawingState()
+        logger.info("DrawingController initialized")
 
     @property
     def mode(self) -> DrawingMode:
@@ -98,46 +103,55 @@ class DrawingController:
         """Start wire drawing mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.WIRE, layer=layer)
+        logger.info("Drawing mode -> WIRE (layer=%d)", layer)
 
     def start_line(self, layer: int = 4) -> None:
         """Start line drawing mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.LINE, layer=layer)
+        logger.info("Drawing mode -> LINE (layer=%d)", layer)
 
     def start_rect(self, layer: int = 4) -> None:
         """Start rectangle drawing mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.RECT, layer=layer)
+        logger.info("Drawing mode -> RECT (layer=%d)", layer)
 
     def start_arc(self, layer: int = 4) -> None:
         """Start arc drawing mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.ARC, layer=layer)
+        logger.info("Drawing mode -> ARC (layer=%d)", layer)
 
     def start_polygon(self, layer: int = 4) -> None:
         """Start polygon drawing mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.POLYGON, layer=layer)
+        logger.info("Drawing mode -> POLYGON (layer=%d)", layer)
 
     def start_text(self) -> None:
         """Start text placement mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.TEXT)
+        logger.info("Drawing mode -> TEXT")
 
     def start_symbol(self, symbol_path: str) -> None:
         """Start symbol placement mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.SYMBOL, symbol_path=symbol_path)
+        logger.info("Drawing mode -> SYMBOL (%s)", symbol_path)
 
     def start_zoom_box(self) -> None:
         """Start zoom box selection mode."""
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.ZOOM_BOX)
+        logger.info("Drawing mode -> ZOOM_BOX")
 
     def cancel(self) -> None:
         """Cancel the current drawing operation."""
         self._clear_preview()
         self._state = DrawingState()
+        logger.info("Drawing operation canceled")
 
     def handle_mouse_press(self, point: QPointF, button: Qt.MouseButton, modifiers: Qt.KeyboardModifiers) -> bool:
         """
@@ -248,6 +262,7 @@ class DrawingController:
         self._clear_preview()
         self._state = DrawingState(mode=DrawingMode.WIRE, layer=self._state.layer)
         self._renderer.render()
+        logger.debug("Finished wire polyline")
         return True
 
     def _create_wire_segment(self, p1: QPointF, p2: QPointF) -> None:
@@ -259,6 +274,7 @@ class DrawingController:
             x2=p2.x(), y2=p2.y()
         )
         self._context.add_wire(wire)
+        logger.debug("Created wire segment (%s,%s)->(%s,%s)", p1.x(), p1.y(), p2.x(), p2.y())
 
     # -------------------------------------------------------------------------
     # Line drawing
@@ -288,6 +304,7 @@ class DrawingController:
         )
         self._context.add_line(self._state.layer, line)
         self._renderer.render()
+        logger.debug("Created line on layer=%d", self._state.layer)
 
     # -------------------------------------------------------------------------
     # Rectangle drawing
@@ -317,6 +334,7 @@ class DrawingController:
         )
         self._context.add_rect(self._state.layer, rect)
         self._renderer.render()
+        logger.debug("Created rect on layer=%d", self._state.layer)
 
     # -------------------------------------------------------------------------
     # Arc drawing
@@ -371,6 +389,7 @@ class DrawingController:
         )
         self._context.add_arc(self._state.layer, arc)
         self._renderer.render()
+        logger.debug("Created arc on layer=%d radius=%.3f", self._state.layer, radius)
 
     # -------------------------------------------------------------------------
     # Polygon drawing
@@ -397,6 +416,7 @@ class DrawingController:
         poly = Polygon.from_points(point_list)
         self._context.add_polygon(self._state.layer, poly)
         self._renderer.render()
+        logger.debug("Created polygon on layer=%d points=%d", self._state.layer, len(points))
 
     # -------------------------------------------------------------------------
     # Text placement
@@ -420,6 +440,7 @@ class DrawingController:
             )
             self._context.add_text(txt)
             self._renderer.render()
+            logger.debug("Placed text at (%.3f, %.3f)", point.x(), point.y())
 
         return True
 
@@ -434,6 +455,12 @@ class DrawingController:
 
         # TODO: Load symbol and create instance
         # For now, just log the action
+        logger.warning(
+            "Symbol placement requested at (%.3f, %.3f) for '%s' but not implemented",
+            point.x(),
+            point.y(),
+            self._state.symbol_path,
+        )
 
         return True
 
@@ -544,3 +571,4 @@ class DrawingController:
         for item in self._state.preview_items:
             scene.removeItem(item)
         self._state.preview_items.clear()
+        logger.debug("Cleared preview items")

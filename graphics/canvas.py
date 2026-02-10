@@ -7,6 +7,7 @@ with smooth zoom/pan, grid display, and rubber-band selection.
 
 from typing import Optional, Tuple, Callable, List
 import math
+import logging
 
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QLineF
 from PySide6.QtGui import (
@@ -29,6 +30,9 @@ from PySide6.QtWidgets import (
 from pyxschem.graphics.layers import LayerManager, GRIDLAYER
 
 
+logger = logging.getLogger(__name__)
+
+
 class SchematicScene(QGraphicsScene):
     """
     QGraphicsScene for schematic content.
@@ -44,6 +48,7 @@ class SchematicScene(QGraphicsScene):
 
         # Use BSP tree for efficient item lookup
         self.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+        logger.debug("Initialized schematic scene with BSP index")
 
     def clear_schematic(self) -> None:
         """Clear all schematic items from the scene."""
@@ -109,6 +114,7 @@ class SchematicCanvas(QGraphicsView):
 
         # Configure view
         self._setup_view()
+        logger.info("Initialized schematic canvas (grid=%s, snap=%s)", self._show_grid, self._snap_to_grid)
 
     def _setup_view(self) -> None:
         """Configure QGraphicsView settings for optimal performance."""
@@ -240,6 +246,7 @@ class SchematicCanvas(QGraphicsView):
 
         # Redraw grid with new scale
         self.resetCachedContent()
+        logger.debug("Zoom changed to %.6f", self._zoom)
 
     def zoom_in(self, center: QPointF = None) -> None:
         """Zoom in by one step."""
@@ -277,6 +284,7 @@ class SchematicCanvas(QGraphicsView):
 
         self.zoom_changed.emit(self._zoom)
         self.resetCachedContent()
+        logger.debug("Fit in view completed (zoom=%.6f)", self._zoom)
 
     def center_on_point(self, point: QPointF) -> None:
         """Center the view on a point in world coordinates."""
@@ -318,6 +326,7 @@ class SchematicCanvas(QGraphicsView):
         self._zoom = new_zoom
         self.zoom_changed.emit(self._zoom)
         self.resetCachedContent()
+        logger.debug("Wheel zoom updated to %.6f", self._zoom)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for pan and selection."""
@@ -328,6 +337,7 @@ class SchematicCanvas(QGraphicsView):
             self._last_pan_pos = event.position()
             self.setCursor(Qt.ClosedHandCursor)
             event.accept()
+            logger.debug("Panning started with middle mouse button")
 
         elif event.button() == Qt.LeftButton:
             if event.modifiers() & Qt.ControlModifier:
@@ -337,6 +347,7 @@ class SchematicCanvas(QGraphicsView):
                 self._last_pan_pos = event.position()
                 self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
+                logger.debug("Panning started with Ctrl+LeftButton")
             else:
                 # Start rubber-band selection
                 self._selection_start = event.position()
@@ -350,6 +361,7 @@ class SchematicCanvas(QGraphicsView):
                 )
                 self._rubber_band.show()
                 event.accept()
+                logger.debug("Rubber-band selection started")
 
         else:
             super().mousePressEvent(event)
@@ -388,6 +400,7 @@ class SchematicCanvas(QGraphicsView):
             self._panning = False
             self.setCursor(Qt.ArrowCursor)
             event.accept()
+            logger.debug("Panning ended")
 
         elif self._selecting and self._rubber_band:
             self._selecting = False
@@ -414,6 +427,7 @@ class SchematicCanvas(QGraphicsView):
 
             self.selection_changed.emit()
             event.accept()
+            logger.debug("Rubber-band selection ended (items=%d)", len(items))
 
         else:
             super().mouseReleaseEvent(event)
@@ -562,3 +576,4 @@ class SchematicCanvas(QGraphicsView):
         self._update_background()
         self.resetCachedContent()
         self.viewport().update()
+        logger.info("Canvas color scheme set to %s", "dark" if dark else "light")

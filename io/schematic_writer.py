@@ -12,6 +12,7 @@ Maintains compatibility with the original xschem file format by:
 from pathlib import Path
 from typing import Optional, TextIO
 import numpy as np
+import logging
 
 from pyxschem.core.primitives import (
     Wire,
@@ -28,6 +29,8 @@ from pyxschem.core.context import SchematicContext
 # Version strings
 PYXSCHEM_VERSION = "0.1.0"
 XSCHEM_FILE_VERSION = "1.2"
+
+logger = logging.getLogger(__name__)
 
 
 class SchematicWriter:
@@ -49,10 +52,25 @@ class SchematicWriter:
             context: SchematicContext to write
             filepath: Output file path
         """
+        logger.info("Writing schematic file '%s'", filepath)
         with open(filepath, "w", encoding="utf-8", newline="\n") as f:
             self._file = f
             self._write_schematic(context)
             self._file = None
+        logger.info(
+            (
+                "Write complete '%s' (wires=%d lines=%d rects=%d arcs=%d "
+                "polygons=%d texts=%d instances=%d)"
+            ),
+            filepath,
+            len(context.wires),
+            sum(len(lines) for lines in context.lines.values()),
+            sum(len(rects) for rects in context.rects.values()),
+            sum(len(arcs) for arcs in context.arcs.values()),
+            sum(len(polys) for polys in context.polygons.values()),
+            len(context.texts),
+            len(context.instances),
+        )
 
     def write_symbol(self, symbol: Symbol, filepath: Path) -> None:
         """
@@ -62,14 +80,25 @@ class SchematicWriter:
             symbol: Symbol to write
             filepath: Output file path
         """
+        logger.info("Writing symbol file '%s' from symbol '%s'", filepath, symbol.name)
         with open(filepath, "w", encoding="utf-8", newline="\n") as f:
             self._file = f
             self._write_symbol(symbol)
             self._file = None
+        logger.info(
+            "Symbol write complete '%s' (lines=%d rects=%d arcs=%d polygons=%d texts=%d)",
+            filepath,
+            sum(len(lines) for lines in symbol.lines.values()),
+            sum(len(rects) for rects in symbol.rects.values()),
+            sum(len(arcs) for arcs in symbol.arcs.values()),
+            sum(len(polys) for polys in symbol.polygons.values()),
+            len(symbol.texts),
+        )
 
     def _write_schematic(self, ctx: SchematicContext) -> None:
         """Write complete schematic to file."""
         assert self._file is not None
+        logger.debug("Serializing schematic '%s'", ctx.current_name or "untitled")
 
         # Version line
         version_str = ctx.version_string
@@ -121,6 +150,7 @@ class SchematicWriter:
     def _write_symbol(self, symbol: Symbol) -> None:
         """Write a symbol definition to file."""
         assert self._file is not None
+        logger.debug("Serializing symbol '%s'", symbol.name)
 
         # Version line
         self._file.write(f"v {{xschem version={PYXSCHEM_VERSION} file_version={XSCHEM_FILE_VERSION}}}\n")

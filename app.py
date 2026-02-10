@@ -4,12 +4,21 @@ PyXSchem Application setup and main window initialization.
 
 import sys
 from typing import List
+import logging
 
 from PySide6.QtWidgets import QApplication
+
+from pyxschem.logging_config import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_app(args: List[str]) -> int:
     """Initialize and run the PyXSchem application."""
+    log_path = setup_logging()
+    logger.info("Starting PyXSchem (args=%s, log_file=%s)", args, log_path)
+
     app = QApplication(sys.argv)
     app.setApplicationName("PyXSchem")
     app.setApplicationVersion("0.1.0")
@@ -25,7 +34,12 @@ def run_app(args: List[str]) -> int:
         from pathlib import Path
         file_path = Path(args[0])
         if file_path.exists():
+            logger.info("Opening startup file: %s", file_path)
             window.open_file(file_path)
+        else:
+            logger.warning("Startup file not found: %s", file_path)
 
     window.show()
-    return app.exec()
+    rc = app.exec()
+    logger.info("Application exited with code %d", rc)
+    return rc

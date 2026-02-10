@@ -25,6 +25,7 @@ File format record types:
 from pathlib import Path
 from typing import Optional, TextIO, Tuple
 import numpy as np
+import logging
 
 from pyxschem.core.primitives import (
     Wire,
@@ -38,6 +39,9 @@ from pyxschem.core.primitives import (
 from pyxschem.core.symbol import Symbol, Instance
 from pyxschem.core.context import SchematicContext
 from pyxschem.core.property_parser import get_tok_value
+
+
+logger = logging.getLogger(__name__)
 
 
 class SchematicReader:
@@ -76,11 +80,28 @@ class SchematicReader:
         """
         self._context = SchematicContext()
         self._context.current_name = str(filepath)
+        logger.info("Reading schematic file '%s'", filepath)
 
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             self._file = f
             self._read_xschem_file()
             self._file = None
+
+        assert self._context is not None
+        logger.info(
+            (
+                "Read complete '%s' (wires=%d lines=%d rects=%d arcs=%d "
+                "polygons=%d texts=%d instances=%d)"
+            ),
+            filepath,
+            len(self._context.wires),
+            sum(len(lines) for lines in self._context.lines.values()),
+            sum(len(rects) for rects in self._context.rects.values()),
+            sum(len(arcs) for arcs in self._context.arcs.values()),
+            sum(len(polys) for polys in self._context.polygons.values()),
+            len(self._context.texts),
+            len(self._context.instances),
+        )
 
         return self._context
 
@@ -95,6 +116,7 @@ class SchematicReader:
             Symbol definition
         """
         ctx = self.read(filepath)
+        logger.info("Converting context to symbol '%s'", filepath)
         return self._context_to_symbol(ctx, str(filepath))
 
     def _context_to_symbol(self, ctx: SchematicContext, name: str) -> Symbol:
@@ -163,10 +185,12 @@ class SchematicReader:
                 self._skip_embedded_symbol()
             elif tag == "{":
                 # Stray brace, try to read as string
+                logger.warning("Encountered stray '{' while parsing; attempting recovery")
                 self._unget_char("{")
                 self._load_ascii_string()
             else:
                 # Unknown tag, skip rest of line
+                logger.warning("Unknown record tag '%s'; skipping line", tag)
                 self._read_line()
 
             # Discard remaining characters on line
@@ -296,6 +320,11 @@ class SchematicReader:
                 self._context.file_version = file_version
             else:
                 self._context.file_version = "1.0"
+            logger.debug(
+                "Version record loaded (version_string='%s', file_version='%s')",
+                version_str,
+                self._context.file_version,
+            )
 
     def _load_line(self) -> None:
         """Load a line record: L layer x1 y1 x2 y2 {props}"""
@@ -303,6 +332,7 @@ class SchematicReader:
 
         layer = self._read_int()
         if layer < 0 or layer >= self.MAX_LAYERS:
+            logger.warning("Skipping line on invalid layer index %d", layer)
             self._read_line()
             return
 
@@ -336,6 +366,7 @@ class SchematicReader:
             bus=bus,
         )
         self._context.add_line(layer, line)
+        logger.debug("Loaded line on layer=%d bbox=%s", layer, line.bbox)
 
     def _load_box(self) -> None:
         """Load a rectangle record: B layer x1 y1 x2 y2 {props}"""
@@ -343,6 +374,7 @@ class SchematicReader:
 
         layer = self._read_int()
         if layer < 0 or layer >= self.MAX_LAYERS:
+            logger.warning("Skipping box on invalid layer index %d", layer)
             self._read_line()
             return
 
@@ -411,6 +443,7 @@ class SchematicReader:
             flags=flags,
         )
         self._context.add_rect(layer, rect)
+        logger.debug("Loaded box on layer=%d bbox=%s fill=%d", layer, rect.bbox, rect.fill)
 
     def _load_arc(self) -> None:
         """Load an arc record: A layer x y r start_angle arc_angle {props}"""
@@ -418,6 +451,7 @@ class SchematicReader:
 
         layer = self._read_int()
         if layer < 0 or layer >= self.MAX_LAYERS:
+            logger.warning("Skipping arc on invalid layer index %d", layer)
             self._read_line()
             return
 
@@ -463,6 +497,7 @@ class SchematicReader:
             bus=bus,
         )
         self._context.add_arc(layer, arc)
+        logger.debug("Loaded arc on layer=%d center=(%s,%s) r=%s", layer, x, y, r)
 
     def _load_polygon(self) -> None:
         """Load a polygon record: P layer npoints x1 y1 x2 y2 ... {props}"""
@@ -472,6 +507,7 @@ class SchematicReader:
         npoints = self._read_int()
 
         if layer < 0 or layer >= self.MAX_LAYERS or npoints < 0:
+            logger.warning("Skipping polygon with invalid layer=%d or npoints=%d", layer, npoints)
             self._read_line()
             return
 
@@ -516,6 +552,7 @@ class SchematicReader:
             bus=bus,
         )
         self._context.add_polygon(layer, polygon)
+        logger.debug("Loaded polygon on layer=%d points=%d", layer, npoints)
 
     def _load_text(self) -> None:
         """Load a text record: T {text} x y rot flip xscale yscale {props}"""
@@ -586,6 +623,14 @@ class SchematicReader:
             flags=flags,
         )
         self._context.add_text(text)
+        logger.debug(
+            "Loaded text at (%.3f, %.3f) rot=%d layer=%d chars=%d",
+            x0,
+            y0,
+            rot,
+            layer,
+            len(txt_ptr),
+        )
 
     def _load_wire(self) -> None:
         """Load a wire record: N x1 y1 x2 y2 {props}"""
@@ -621,6 +666,7 @@ class SchematicReader:
             bus=bus,
         )
         self._context.add_wire(wire)
+        logger.debug("Loaded wire bbox=%s bus=%s", wire.bbox, wire.bus)
 
     def _load_inst(self) -> None:
         """Load a component instance: C {symbol.sym} x y rot flip {props}"""
@@ -628,6 +674,7 @@ class SchematicReader:
 
         name = self._load_ascii_string()
         if not name:
+            logger.warning("Skipping instance record with empty symbol name")
             return
 
         # Add .sym extension for old format
@@ -656,9 +703,18 @@ class SchematicReader:
                 instance.instname = instname
 
         self._context.add_instance(instance)
+        logger.debug(
+            "Loaded instance symbol='%s' at (%.3f, %.3f) rot=%d flip=%d",
+            name,
+            x0,
+            y0,
+            rot,
+            flip,
+        )
 
     def _skip_embedded_symbol(self) -> None:
         """Skip an embedded symbol definition between [ and ]."""
+        logger.info("Skipping embedded symbol block")
         self._read_line()  # Skip rest of [ line
 
         depth = 1
@@ -671,6 +727,7 @@ class SchematicReader:
                 depth -= 1
             elif stripped.startswith("["):
                 depth += 1
+        logger.debug("Finished skipping embedded symbol block")
 
 
 def read_schematic(filepath: str | Path) -> SchematicContext:

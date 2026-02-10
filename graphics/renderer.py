@@ -8,6 +8,7 @@ creating appropriate QGraphicsItems for all primitives.
 from typing import Optional, Dict, List, TYPE_CHECKING
 
 from PySide6.QtCore import QRectF
+import logging
 
 from pyxschem.graphics.layers import LayerManager
 from pyxschem.graphics.canvas import SchematicCanvas, SchematicScene
@@ -24,6 +25,9 @@ from pyxschem.graphics.items import (
 if TYPE_CHECKING:
     from pyxschem.core.context import SchematicContext
     from pyxschem.core.symbol import Symbol
+
+
+logger = logging.getLogger(__name__)
 
 
 class SchematicRenderer:
@@ -73,6 +77,7 @@ class SchematicRenderer:
 
     def clear(self) -> None:
         """Clear all rendered items."""
+        logger.debug("Clearing rendered scene items")
         self._scene.clear()
         self._wire_items.clear()
         self._line_items.clear()
@@ -92,6 +97,7 @@ class SchematicRenderer:
         self.clear()
 
         if self._context is None:
+            logger.debug("Render skipped: no context set")
             return
 
         # Render all primitive types
@@ -102,6 +108,19 @@ class SchematicRenderer:
         self._render_polygons()
         self._render_texts()
         self._render_instances()
+        logger.info(
+            (
+                "Render complete (wires=%d lines=%d rects=%d arcs=%d "
+                "polygons=%d texts=%d instances=%d)"
+            ),
+            len(self._wire_items),
+            sum(len(items) for items in self._line_items.values()),
+            sum(len(items) for items in self._rect_items.values()),
+            sum(len(items) for items in self._arc_items.values()),
+            sum(len(items) for items in self._polygon_items.values()),
+            len(self._text_items),
+            len(self._instance_items),
+        )
 
     def _render_wires(self) -> None:
         """Render all wires."""
@@ -178,6 +197,7 @@ class SchematicRenderer:
     def fit_view(self) -> None:
         """Fit the canvas view to show all content."""
         self._canvas.fit_in_view()
+        logger.debug("Fit view requested")
 
     def get_bounding_rect(self) -> QRectF:
         """Get the bounding rectangle of all rendered items."""
@@ -212,6 +232,7 @@ class SchematicRenderer:
                 item.set_highlight(color)
             else:
                 item.set_highlight(None)
+        logger.info("Net highlight applied for '%s'", net_name)
 
     def clear_highlights(self) -> None:
         """Clear all highlights."""
@@ -219,6 +240,7 @@ class SchematicRenderer:
             item.set_highlight(None)
         for item in self._instance_items:
             item.set_highlight(None)
+        logger.debug("Cleared all highlights")
 
     def get_items_at(self, x: float, y: float) -> List:
         """

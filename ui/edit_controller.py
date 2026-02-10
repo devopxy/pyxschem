@@ -14,6 +14,7 @@ from enum import Enum, auto
 from typing import Optional, List, Set, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 from copy import deepcopy
+import logging
 
 from PySide6.QtCore import Qt, QPointF, QMimeData
 from PySide6.QtWidgets import QApplication
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
     from pyxschem.core.primitives import Wire, Line, Rect, Arc, Polygon, Text
     from pyxschem.core.symbol import Instance
     from pyxschem.graphics import SchematicCanvas, SchematicRenderer
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,6 +65,7 @@ class EditController:
         self._renderer = renderer
         self._context = context
         self._clipboard = ClipboardData()
+        logger.info("EditController initialized")
 
     # -------------------------------------------------------------------------
     # Selection operations
@@ -96,6 +101,7 @@ class EditController:
             inst.sel = SelectionState.SELECTED
 
         self._renderer.render()
+        logger.info("Select all completed")
 
     def deselect_all(self) -> None:
         """Deselect all objects."""
@@ -128,6 +134,7 @@ class EditController:
 
         self._canvas.get_scene().clearSelection()
         self._renderer.render()
+        logger.info("Deselect all completed")
 
     def get_selected_wires(self) -> List["Wire"]:
         """Get all selected wires."""
@@ -251,11 +258,25 @@ class EditController:
 
         # Calculate reference point (center of selection bbox)
         self._clipboard.reference_point = self._calculate_selection_center()
+        logger.info(
+            (
+                "Copied selection to clipboard (wires=%d lines=%d rects=%d arcs=%d "
+                "polygons=%d texts=%d instances=%d)"
+            ),
+            len(self._clipboard.wires),
+            sum(len(v) for v in self._clipboard.lines.values()),
+            sum(len(v) for v in self._clipboard.rects.values()),
+            sum(len(v) for v in self._clipboard.arcs.values()),
+            sum(len(v) for v in self._clipboard.polygons.values()),
+            len(self._clipboard.texts),
+            len(self._clipboard.instances),
+        )
 
     def cut(self) -> None:
         """Cut selected objects (copy + delete)."""
         self.copy()
         self.delete()
+        logger.info("Cut operation completed")
 
     def paste(self, offset: Tuple[float, float] = (20.0, 20.0)) -> None:
         """
@@ -267,6 +288,7 @@ class EditController:
         from pyxschem.core.primitives import SelectionState
 
         if not self._has_clipboard_data():
+            logger.warning("Paste requested with empty clipboard")
             return
 
         # Deselect everything first
@@ -341,6 +363,7 @@ class EditController:
             self._context.add_instance(new_inst)
 
         self._renderer.render()
+        logger.info("Paste completed with offset=(%.3f, %.3f)", ox, oy)
 
     def _has_clipboard_data(self) -> bool:
         """Check if clipboard has data."""
@@ -391,6 +414,10 @@ class EditController:
         """Delete selected objects."""
         from pyxschem.core.primitives import SelectionState
 
+        wires_before = len(self._context.wires)
+        texts_before = len(self._context.texts)
+        instances_before = len(self._context.instances)
+
         # Delete wires
         self._context.wires = [
             w for w in self._context.wires
@@ -439,6 +466,12 @@ class EditController:
 
         self._context.modified = True
         self._renderer.render()
+        logger.info(
+            "Delete completed (wires_removed=%d texts_removed=%d instances_removed=%d)",
+            wires_before - len(self._context.wires),
+            texts_before - len(self._context.texts),
+            instances_before - len(self._context.instances),
+        )
 
     # -------------------------------------------------------------------------
     # Move operation
@@ -508,6 +541,7 @@ class EditController:
 
         self._context.modified = True
         self._renderer.render()
+        logger.info("Move completed (dx=%.3f, dy=%.3f)", dx, dy)
 
     # -------------------------------------------------------------------------
     # Rotate operation
@@ -526,6 +560,7 @@ class EditController:
         # Calculate center of selection
         center = self._get_selection_center()
         if center is None:
+            logger.warning("Rotate requested without selection")
             return
 
         cx, cy = center
@@ -592,6 +627,7 @@ class EditController:
 
         self._context.modified = True
         self._renderer.render()
+        logger.info("Rotate completed (degrees=%d center=%s)", degrees, center)
 
     # -------------------------------------------------------------------------
     # Flip operations
@@ -603,6 +639,7 @@ class EditController:
 
         center = self._get_selection_center()
         if center is None:
+            logger.warning("Horizontal flip requested without selection")
             return
 
         cx, cy = center
@@ -659,6 +696,7 @@ class EditController:
 
         self._context.modified = True
         self._renderer.render()
+        logger.info("Horizontal flip completed (center=%s)", center)
 
     def flip_vertical(self) -> None:
         """Flip selected objects vertically around their center."""
@@ -666,6 +704,7 @@ class EditController:
 
         center = self._get_selection_center()
         if center is None:
+            logger.warning("Vertical flip requested without selection")
             return
 
         cx, cy = center
@@ -730,6 +769,7 @@ class EditController:
 
         self._context.modified = True
         self._renderer.render()
+        logger.info("Vertical flip completed (center=%s)", center)
 
     def _get_selection_center(self) -> Optional[Tuple[float, float]]:
         """Get the center of the current selection."""
@@ -785,3 +825,4 @@ class EditController:
         """
         self.copy()
         self.paste(offset)
+        logger.info("Duplicate completed with offset=(%.3f, %.3f)", offset[0], offset[1])
