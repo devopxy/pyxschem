@@ -286,6 +286,30 @@ def apply_editor_theme(window: QMainWindow, theme_name: str = "dark") -> str:
         QComboBox:hover {{
             border-color: {theme.accent};
         }}
+
+        QDockWidget#terminal_console_dock {{
+            border-top: 1px solid {theme.border};
+        }}
+
+        QPlainTextEdit#terminal_output,
+        QPlainTextEdit#debug_console {{
+            background: {theme.panel_alt};
+            color: {theme.text};
+            border: 1px solid {theme.border};
+            selection-background-color: {theme.active};
+        }}
+
+        QLineEdit {{
+            background: {theme.panel};
+            color: {theme.text};
+            border: 1px solid {theme.border};
+            border-radius: 2px;
+            padding: 4px 6px;
+        }}
+
+        QLineEdit:focus {{
+            border-color: {theme.accent};
+        }}
         """
     )
 

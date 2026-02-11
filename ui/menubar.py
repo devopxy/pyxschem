@@ -37,6 +37,7 @@ class MenuBarSetup:
         self._menubar = main_window.menuBar()
         self._recent_files_menu: Optional[QMenu] = None
         self._style = main_window.style()
+        self._dynamic_menus: list[QMenu] = []
         self._grid_action: Optional[QAction] = None
         self._snap_action: Optional[QAction] = None
         self._simulate_action: Optional[QAction] = None
@@ -83,6 +84,7 @@ class MenuBarSetup:
         self._create_symbol_menu()
         self._create_highlight_menu()
         self._create_simulation_menu()
+        self._create_vscode_menus()
         self._create_help_menu()
 
     def _create_file_menu(self) -> None:
@@ -370,6 +372,12 @@ class MenuBarSetup:
             workflow_action.setIcon(self._style.standardIcon(QStyle.SP_FileDialogDetailedView))
             panels_menu.addAction(workflow_action)
 
+        if self._window.terminal_console_dock is not None:
+            terminal_action = self._window.terminal_console_dock.toggleViewAction()
+            terminal_action.setText("Terminal / Debug Panel")
+            terminal_action.setIcon(self._style.standardIcon(QStyle.SP_ComputerIcon))
+            panels_menu.addAction(terminal_action)
+
         panels_menu.addSeparator()
         self._add_action(
             panels_menu,
@@ -571,6 +579,59 @@ class MenuBarSetup:
             icon=QStyle.SP_MediaPlay,
         )
 
+    def _create_vscode_menus(self) -> None:
+        """Create JSON-driven VS Code-like additional menus."""
+        config = self._window.config_manager.section("menus")
+        if not config.get("enable_vscode_menus", True):
+            return
+
+        menu_defs = config.get("vscode_like_menus", [])
+        if not isinstance(menu_defs, list):
+            return
+
+        for menu_def in menu_defs:
+            if not isinstance(menu_def, dict):
+                continue
+            title = menu_def.get("title")
+            items = menu_def.get("items")
+            if not isinstance(title, str) or not title.strip() or not isinstance(items, list):
+                continue
+
+            menu = self._menubar.addMenu(title)
+            self._dynamic_menus.append(menu)
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("separator"):
+                    menu.addSeparator()
+                    continue
+
+                label = item.get("label")
+                callback_name = item.get("callback")
+                if not isinstance(label, str) or not label.strip():
+                    continue
+
+                action = menu.addAction(label)
+                shortcut = item.get("shortcut")
+                if isinstance(shortcut, str) and shortcut.strip():
+                    action.setShortcut(shortcut)
+
+                callback = self._resolve_window_callback(callback_name)
+                if callback is None:
+                    action.setEnabled(False)
+                    continue
+                action.triggered.connect(callback)
+
+    def _resolve_window_callback(self, callback_name) -> Optional[Callable]:
+        """Resolve callback name from MainWindow; return None if unavailable."""
+        if not isinstance(callback_name, str) or not callback_name:
+            return None
+        callback = getattr(self._window, callback_name, None)
+        if callable(callback):
+            return callback
+        return None
+
     def _create_help_menu(self) -> None:
         """Create the Help menu."""
         menu = self._menubar.addMenu("&Help")
@@ -613,12 +674,16 @@ class MenuBarSetup:
         self._window._toolbar_setup.set_visibility(True, True, True)
         if self._window.workflow_dock is not None:
             self._window.workflow_dock.show()
+        if self._window.terminal_console_dock is not None:
+            self._window.terminal_console_dock.show()
 
     def _hide_all_panels(self) -> None:
         """Hide all configurable toolbars and side workflow panel."""
         self._window._toolbar_setup.set_visibility(False, False, False)
         if self._window.workflow_dock is not None:
             self._window.workflow_dock.hide()
+        if self._window.terminal_console_dock is not None:
+            self._window.terminal_console_dock.hide()
 
     def _apply_toolbar_style(self, style: Qt.ToolButtonStyle) -> None:
         """Apply selected toolbar button style."""

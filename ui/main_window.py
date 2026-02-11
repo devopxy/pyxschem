@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional, List
 import logging
 
-from PySide6.QtCore import Qt, Signal, Slot, QSettings
+from PySide6.QtCore import Qt, Signal, Slot, QByteArray
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -24,16 +24,21 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QPushButton,
     QStyle,
+    QMenu,
 )
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QAction
 
+from pyxschem.automation import ScriptAutomationRunner
+from pyxschem.config import JsonConfigManager
 from pyxschem.core.context import SchematicContext, UIState, NetlistType
 from pyxschem.graphics import SchematicCanvas, SchematicRenderer, LayerManager
 from pyxschem.io import read_schematic, write_schematic
+from pyxschem.plugins import PluginManager
 from pyxschem.ui.menubar import MenuBarSetup
 from pyxschem.ui.toolbar import ToolBarSetup
 from pyxschem.ui.statusbar import StatusBarSetup
 from pyxschem.ui.theme import apply_editor_theme, is_dark_theme
+from pyxschem.ui.widgets import TerminalConsoleDock
 
 
 logger = logging.getLogger(__name__)
@@ -61,7 +66,11 @@ class MainWindow(QMainWindow):
     # Recent files list
     MAX_RECENT_FILES = 10
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        config_manager: Optional[JsonConfigManager] = None,
+    ):
         super().__init__(parent)
 
         self.setWindowTitle("PyXSchem")
@@ -70,7 +79,11 @@ class MainWindow(QMainWindow):
         # Application state
         self._context: Optional[SchematicContext] = None
         self._recent_files: List[str] = []
-        self._settings = QSettings("PyXSchem", "PyXSchem")
+        self._config_manager = config_manager or JsonConfigManager()
+
+        # Plugin/UI extension state
+        self._plugin_menus: dict[str, QMenu] = {}
+        self._plugin_menu_actions: list[QAction] = []
 
         # UI mode flags
         self._ui_theme = "dark"
@@ -82,6 +95,10 @@ class MainWindow(QMainWindow):
         self._simulation_running = False
         self._has_wave_results = False
         self._sim_profile_exists = False
+
+        # Service subsystems
+        self._plugin_manager = PluginManager(self, self._config_manager)
+        self._automation_runner = ScriptAutomationRunner(self)
 
         # Initialize components
         self._setup_layer_manager()
@@ -99,6 +116,9 @@ class MainWindow(QMainWindow):
 
         # Apply UI styling after widgets are created.
         self._apply_modern_theme()
+
+        # Load extension plugins after the full UI surface is available.
+        self._plugin_manager.load_plugins()
 
         # Create new empty schematic
         self.new_schematic()
@@ -152,6 +172,7 @@ class MainWindow(QMainWindow):
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels."""
         self._create_workflow_dock()
+        self._create_terminal_console_dock()
 
     def _create_workflow_dock(self) -> None:
         """Create a compact IC workflow palette."""
@@ -226,6 +247,14 @@ class MainWindow(QMainWindow):
         self._workflow_dock = dock
         logger.debug("Workflow dock initialized")
 
+    def _create_terminal_console_dock(self) -> None:
+        """Create integrated terminal and debug console dock."""
+        dock = TerminalConsoleDock(self)
+        dock.attach_log_handler()
+        self.addDockWidget(Qt.BottomDockWidgetArea, dock)
+        self._terminal_console_dock = dock
+        logger.debug("Terminal/debug dock initialized")
+
     def _add_workflow_button(
         self,
         layout: QVBoxLayout,
@@ -265,70 +294,64 @@ class MainWindow(QMainWindow):
                     canvas._renderer.render()
 
     def _load_settings(self) -> None:
-        """Load application settings."""
-        # Window geometry
-        geometry = self._settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
+        """Load application settings from JSON configuration files."""
+        geometry_b64 = self._config_manager.get("ui", "window.geometry", "")
+        if isinstance(geometry_b64, str) and geometry_b64:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(geometry_b64.encode("ascii")))
+            except Exception:
+                logger.exception("Failed to restore window geometry from JSON config")
 
-        state = self._settings.value("windowState")
-        if state:
-            self.restoreState(state)
+        state_b64 = self._config_manager.get("ui", "window.state", "")
+        if isinstance(state_b64, str) and state_b64:
+            try:
+                self.restoreState(QByteArray.fromBase64(state_b64.encode("ascii")))
+            except Exception:
+                logger.exception("Failed to restore window state from JSON config")
 
-        # Recent files
-        self._recent_files = self._settings.value("recentFiles", []) or []
-        if isinstance(self._recent_files, str):
-            self._recent_files = [self._recent_files] if self._recent_files else []
-
-        # UI theme and color scheme (darkScheme kept for compatibility).
-        theme_raw = self._settings.value("ui/theme", "", type=str)
-        if theme_raw:
-            self._ui_theme = theme_raw
+        recent_files = self._config_manager.get("ui", "recent_files", [])
+        if isinstance(recent_files, list):
+            self._recent_files = [str(path) for path in recent_files if isinstance(path, str)]
+        elif isinstance(recent_files, str) and recent_files:
+            self._recent_files = [recent_files]
         else:
-            legacy_dark = self._settings.value("darkScheme", True, type=bool)
-            self._ui_theme = "dark" if legacy_dark else "light"
+            self._recent_files = []
 
+        theme_raw = self._config_manager.get("ui", "theme", "dark")
+        self._ui_theme = str(theme_raw or "dark")
         self._dark_scheme = is_dark_theme(self._ui_theme)
         self._layer_manager.dark_scheme = self._dark_scheme
 
-        # Grid settings
-        self._show_grid = self._settings.value("showGrid", True, type=bool)
-        self._snap_to_grid = self._settings.value("snapToGrid", True, type=bool)
+        self._show_grid = bool(self._config_manager.get("ui", "show_grid", True))
+        self._snap_to_grid = bool(self._config_manager.get("ui", "snap_to_grid", True))
+
         if hasattr(self, "_toolbar_setup"):
             self._toolbar_setup.update_grid_button(self._show_grid)
             self._toolbar_setup.update_snap_button(self._snap_to_grid)
 
-            # Toolbar style persistence must tolerate different PySide enum behaviors:
-            # - int-like enum values
-            # - enum objects
-            # - string names from older/newer settings formats
             default_style = Qt.ToolButtonTextUnderIcon
-            default_style_value = getattr(default_style, "value", default_style)
-            style_raw = self._settings.value("toolbar/style", default_style_value)
-            style_name_raw = self._settings.value("toolbar/styleName", "")
-
+            style_raw = self._config_manager.get("ui", "toolbar.style", "ToolButtonTextUnderIcon")
             resolved_style = default_style
             try:
-                if hasattr(style_raw, "value"):
-                    style_raw = style_raw.value
-                resolved_style = Qt.ToolButtonStyle(int(style_raw))
-            except (TypeError, ValueError):
-                enum_candidate = None
-                if isinstance(style_raw, str):
+                if isinstance(style_raw, int):
+                    resolved_style = Qt.ToolButtonStyle(int(style_raw))
+                elif isinstance(style_raw, str) and style_raw.isdigit():
+                    resolved_style = Qt.ToolButtonStyle(int(style_raw))
+                elif isinstance(style_raw, str):
                     enum_candidate = getattr(Qt.ToolButtonStyle, style_raw, None)
-                if enum_candidate is None and isinstance(style_name_raw, str):
-                    enum_candidate = getattr(Qt.ToolButtonStyle, style_name_raw, None)
-                if enum_candidate is not None:
-                    resolved_style = enum_candidate
+                    if enum_candidate is not None:
+                        resolved_style = enum_candidate
+            except (TypeError, ValueError):
+                resolved_style = default_style
 
-            icon_size = self._settings.value("toolbar/iconSize", 20, type=int)
+            icon_size = int(self._config_manager.get("ui", "toolbar.icon_size", 20))
             self._toolbar_setup.set_tool_button_style(resolved_style)
             self._toolbar_setup.set_icon_size(icon_size)
 
             self._toolbar_setup.set_visibility(
-                quick=self._settings.value("toolbar/quickVisible", True, type=bool),
-                draw=self._settings.value("toolbar/drawVisible", True, type=bool),
-                sim=self._settings.value("toolbar/simVisible", True, type=bool),
+                quick=bool(self._config_manager.get("ui", "toolbar.quick_visible", True)),
+                draw=bool(self._config_manager.get("ui", "toolbar.draw_visible", True)),
+                sim=bool(self._config_manager.get("ui", "toolbar.sim_visible", True)),
             )
 
         if hasattr(self, "_menu_setup"):
@@ -338,11 +361,16 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "_workflow_dock"):
             self._workflow_dock.setVisible(
-                self._settings.value("dock/workflowVisible", True, type=bool)
+                bool(self._config_manager.get("ui", "dock.workflow_visible", True))
             )
+        if hasattr(self, "_terminal_console_dock"):
+            self._terminal_console_dock.setVisible(
+                bool(self._config_manager.get("ui", "dock.terminal_visible", True))
+            )
+
         self._sync_status_indicators()
         logger.info(
-            "Settings loaded (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            "JSON config loaded (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
             len(self._recent_files),
             self._ui_theme,
             self._dark_scheme,
@@ -351,36 +379,41 @@ class MainWindow(QMainWindow):
         )
 
     def _save_settings(self) -> None:
-        """Save application settings."""
-        self._settings.setValue("geometry", self.saveGeometry())
-        self._settings.setValue("windowState", self.saveState())
-        self._settings.setValue("recentFiles", self._recent_files[:self.MAX_RECENT_FILES])
-        self._settings.setValue("ui/theme", self._ui_theme)
-        self._settings.setValue("darkScheme", self._dark_scheme)
-        self._settings.setValue("showGrid", self._show_grid)
-        self._settings.setValue("snapToGrid", self._snap_to_grid)
+        """Save application settings to JSON configuration files."""
+        geometry_b64 = bytes(self.saveGeometry().toBase64()).decode("ascii")
+        state_b64 = bytes(self.saveState().toBase64()).decode("ascii")
+
+        self._config_manager.set("ui", "window.geometry", geometry_b64)
+        self._config_manager.set("ui", "window.state", state_b64)
+        self._config_manager.set("ui", "recent_files", self._recent_files[:self.MAX_RECENT_FILES])
+        self._config_manager.set("ui", "theme", self._ui_theme)
+        self._config_manager.set("ui", "show_grid", self._show_grid)
+        self._config_manager.set("ui", "snap_to_grid", self._snap_to_grid)
+
         if hasattr(self, "_toolbar_setup"):
             style_enum = self._toolbar_setup.current_tool_button_style()
             style_name = getattr(style_enum, "name", "")
-            style_value = getattr(style_enum, "value", None)
-            if style_value is None:
-                style_value = style_name or str(style_enum)
-            self._settings.setValue(
-                "toolbar/style",
-                style_value,
-            )
-            self._settings.setValue("toolbar/styleName", style_name)
-            self._settings.setValue("toolbar/iconSize", self._toolbar_setup.current_icon_size())
+            style_value = style_name or str(getattr(style_enum, "value", style_enum))
+            self._config_manager.set("ui", "toolbar.style", style_value)
+            self._config_manager.set("ui", "toolbar.icon_size", self._toolbar_setup.current_icon_size())
 
             visibility = self._toolbar_setup.visibility_map()
-            self._settings.setValue("toolbar/quickVisible", visibility["quick"])
-            self._settings.setValue("toolbar/drawVisible", visibility["draw"])
-            self._settings.setValue("toolbar/simVisible", visibility["sim"])
+            self._config_manager.set("ui", "toolbar.quick_visible", visibility["quick"])
+            self._config_manager.set("ui", "toolbar.draw_visible", visibility["draw"])
+            self._config_manager.set("ui", "toolbar.sim_visible", visibility["sim"])
 
         if hasattr(self, "_workflow_dock"):
-            self._settings.setValue("dock/workflowVisible", self._workflow_dock.isVisible())
+            self._config_manager.set("ui", "dock.workflow_visible", self._workflow_dock.isVisible())
+        if hasattr(self, "_terminal_console_dock"):
+            self._config_manager.set(
+                "ui",
+                "dock.terminal_visible",
+                self._terminal_console_dock.isVisible(),
+            )
+
+        self._config_manager.save_all()
         logger.info(
-            "Settings saved (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            "JSON config saved (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
             len(self._recent_files),
             self._ui_theme,
             self._dark_scheme,
@@ -506,6 +539,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_menu_setup"):
             self._menu_setup.update_grid_action(self._show_grid)
             self._menu_setup.update_snap_action(self._snap_to_grid)
+            self._menu_setup.update_theme_actions(self._ui_theme)
         if hasattr(self, "_toolbar_setup"):
             self._toolbar_setup.update_grid_button(self._show_grid)
             self._toolbar_setup.update_snap_button(self._snap_to_grid)
@@ -586,6 +620,157 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Export pipeline not yet implemented", 2400)
         logger.warning("Export requested but not implemented")
 
+    @Slot()
+    def toggle_terminal_panel(self) -> None:
+        """Show or hide the integrated terminal/debug dock."""
+        dock = self.terminal_console_dock
+        if dock is None:
+            return
+        dock.setVisible(not dock.isVisible())
+        if dock.isVisible():
+            dock.raise_()
+            dock.show_terminal_tab()
+
+    @Slot()
+    def toggle_debug_console(self) -> None:
+        """Show the terminal dock focused on debug console output."""
+        dock = self.terminal_console_dock
+        if dock is None:
+            return
+        dock.show()
+        dock.raise_()
+        dock.show_debug_tab()
+
+    @Slot()
+    def clear_terminal_output(self) -> None:
+        """Clear terminal pane output."""
+        dock = self.terminal_console_dock
+        if dock is None:
+            return
+        dock.clear_terminal()
+
+    @Slot()
+    def clear_debug_console(self) -> None:
+        """Clear debug console pane output."""
+        dock = self.terminal_console_dock
+        if dock is None:
+            return
+        dock.clear_debug()
+
+    @Slot()
+    def open_command_palette(self) -> None:
+        """Show a command palette placeholder entry point."""
+        QMessageBox.information(
+            self,
+            "Command Palette",
+            "Command palette is planned for a future iteration.\n"
+            "Use menus/toolbars or automation scripts for now.",
+        )
+
+    @Slot()
+    def reload_plugins(self) -> None:
+        """Reload all plugins from configured plugin folders."""
+        self._plugin_manager.reload_plugins()
+        names = self._plugin_manager.list_plugins()
+        message = "Plugins reloaded: " + (", ".join(names) if names else "(none)")
+        self.statusBar().showMessage(message, 2800)
+
+    @Slot()
+    def show_plugins_folder(self) -> None:
+        """Show configured plugin directories."""
+        plugin_dirs = self._config_manager.expand_config_paths("plugins", "directories")
+        text = "\n".join(str(path) for path in plugin_dirs) or "(none configured)"
+        QMessageBox.information(self, "Plugins Folder", text)
+
+    @Slot()
+    def show_installed_plugins(self) -> None:
+        """Show loaded plugin names and paths."""
+        loaded = self._plugin_manager.list_plugins()
+        if loaded:
+            body = "\n".join(f"- {name}" for name in loaded)
+        else:
+            body = "No plugins loaded"
+        QMessageBox.information(self, "Installed Plugins", body)
+
+    @Slot()
+    def run_python_script_dialog(self) -> None:
+        """Pick and run a python automation script."""
+        start_dir = self._config_manager.get("automation", "last_script", "")
+        if not start_dir:
+            dirs = self._config_manager.expand_config_paths("automation", "script_directories")
+            if dirs:
+                start_dir = str(dirs[0])
+
+        script_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Run Python Script",
+            start_dir,
+            "Python Scripts (*.py);;All Files (*)",
+        )
+        if not script_path:
+            return
+
+        self._config_manager.set("automation", "last_script", script_path)
+        self._config_manager.save_section("automation")
+
+        try:
+            self._automation_runner.run_script(Path(script_path))
+            self.statusBar().showMessage(f"Automation script completed: {Path(script_path).name}", 3000)
+        except Exception as exc:
+            logger.exception("Automation script failed: %s", script_path)
+            QMessageBox.critical(
+                self,
+                "Automation Script Error",
+                f"Failed to run script:\n{script_path}\n\n{exc}",
+            )
+
+    @Slot()
+    def run_workflow_dialog(self) -> None:
+        """Pick and run a JSON workflow file."""
+        start_dir = self._config_manager.get("automation", "last_workflow", "")
+        if not start_dir:
+            dirs = self._config_manager.expand_config_paths("automation", "workflow_directories")
+            if dirs:
+                start_dir = str(dirs[0])
+
+        workflow_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Run Workflow",
+            start_dir,
+            "Workflow Files (*.json);;All Files (*)",
+        )
+        if not workflow_path:
+            return
+
+        self.run_workflow_file(Path(workflow_path))
+
+    def run_workflow_file(self, workflow_path: Path) -> None:
+        """Run a selected workflow path and surface failures in UI."""
+        self._config_manager.set("automation", "last_workflow", str(workflow_path))
+        self._config_manager.save_section("automation")
+
+        try:
+            self._automation_runner.run_workflow(workflow_path)
+            self.statusBar().showMessage(f"Workflow completed: {workflow_path.name}", 3000)
+        except Exception as exc:
+            logger.exception("Workflow failed: %s", workflow_path)
+            QMessageBox.critical(
+                self,
+                "Workflow Error",
+                f"Failed to run workflow:\n{workflow_path}\n\n{exc}",
+            )
+
+    @Slot()
+    def start_debug_session(self) -> None:
+        """Open debug console as session start placeholder."""
+        self.toggle_debug_console()
+        self.statusBar().showMessage("Debug session started (console mode placeholder)", 2200)
+
+    @Slot()
+    def stop_debug_session(self) -> None:
+        """Stop debug session placeholder."""
+        self.statusBar().showMessage("Debug session stopped", 1800)
+
     # -------------------------------------------------------------------------
     # Properties
     # -------------------------------------------------------------------------
@@ -630,6 +815,68 @@ class MainWindow(QMainWindow):
     def snap_to_grid_enabled(self) -> bool:
         """Return whether snap-to-grid is enabled."""
         return self._snap_to_grid
+
+    @property
+    def config_manager(self) -> JsonConfigManager:
+        """Return JSON configuration manager."""
+        return self._config_manager
+
+    @property
+    def plugin_manager(self) -> PluginManager:
+        """Return plugin manager instance."""
+        return self._plugin_manager
+
+    @property
+    def terminal_console_dock(self) -> Optional[TerminalConsoleDock]:
+        """Return terminal/debug dock widget."""
+        return getattr(self, "_terminal_console_dock", None)
+
+    def _find_menu_by_title(self, menu_name: str) -> Optional[QMenu]:
+        """Find an existing top-level menu by title (ignoring ampersands)."""
+        normalized = menu_name.replace("&", "").strip().lower()
+        for action in self.menuBar().actions():
+            menu = action.menu()
+            if menu is None:
+                continue
+            title = menu.title().replace("&", "").strip().lower()
+            if title == normalized:
+                return menu
+        return None
+
+    def register_plugin_menu_action(
+        self,
+        menu_name: str,
+        label: str,
+        callback,
+        shortcut: str | None = None,
+    ) -> QAction:
+        """Register a menu action under a plugin-owned or existing menu."""
+        menu = self._find_menu_by_title(menu_name)
+        if menu is None:
+            menu = self._plugin_menus.get(menu_name)
+        if menu is None:
+            menu = self.menuBar().addMenu(menu_name)
+            self._plugin_menus[menu_name] = menu
+
+        action = menu.addAction(label)
+        action.triggered.connect(callback)
+        if shortcut:
+            action.setShortcut(shortcut)
+
+        self._plugin_menu_actions.append(action)
+        return action
+
+    def clear_plugin_menu_actions(self) -> None:
+        """Remove previously-registered plugin menu actions and menus."""
+        for action in self._plugin_menu_actions:
+            parent = action.parent()
+            if isinstance(parent, QMenu):
+                parent.removeAction(action)
+        self._plugin_menu_actions.clear()
+
+        for menu in self._plugin_menus.values():
+            self.menuBar().removeAction(menu.menuAction())
+        self._plugin_menus.clear()
 
     # -------------------------------------------------------------------------
     # File Operations
@@ -1354,6 +1601,9 @@ class MainWindow(QMainWindow):
                         logger.info("Close canceled by user")
                         return
 
+        if hasattr(self, "_terminal_console_dock"):
+            self._terminal_console_dock.detach_log_handler()
+        self._plugin_manager.unload_plugins()
         self._save_settings()
         event.accept()
         logger.info("Window close accepted")
