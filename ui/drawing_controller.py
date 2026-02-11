@@ -453,16 +453,91 @@ class DrawingController:
         if not self._state.symbol_path:
             return False
 
-        # TODO: Load symbol and create instance
-        # For now, just log the action
-        logger.warning(
-            "Symbol placement requested at (%.3f, %.3f) for '%s' but not implemented",
-            point.x(),
-            point.y(),
-            self._state.symbol_path,
-        )
+        from pyxschem.core.symbol_loader import SymbolLoader
+        from pyxschem.core.symbol import Instance
+        from pyxschem.core.property_parser import get_tok_value
 
+        loader = SymbolLoader()
+        symbol = loader.load_symbol(self._state.symbol_path, self._context)
+        if symbol is None:
+            logger.error("Could not load symbol '%s'", self._state.symbol_path)
+            return True
+
+        # Build default properties from template
+        props = symbol.templ or ""
+        instname = self._generate_unique_name(symbol)
+
+        # Insert instance name into properties
+        if instname:
+            if props and "name=" not in props:
+                props = f"name={instname} {props}"
+            elif not props:
+                props = f"name={instname}"
+
+        # Look up symbol index in context
+        sym_idx = self._context.symbol_map.get(symbol.name, -1)
+
+        instance = Instance(
+            name=self._state.symbol_path,
+            ptr=sym_idx,
+            x0=point.x(),
+            y0=point.y(),
+            rot=0,
+            flip=0,
+            prop_ptr=props,
+            instname=instname,
+        )
+        instance.calculate_bbox(symbol)
+        self._context.add_instance(instance)
+        self._renderer.render()
+
+        logger.info(
+            "Placed instance '%s' of '%s' at (%.1f, %.1f)",
+            instname, self._state.symbol_path, point.x(), point.y(),
+        )
         return True
+
+    def _generate_unique_name(self, symbol) -> str:
+        """Generate a unique instance name based on symbol type."""
+        from pyxschem.core.symbol import SymbolType
+
+        # Determine prefix from symbol type
+        sym_type = symbol.type or ""
+        if sym_type == SymbolType.SUBCIRCUIT:
+            prefix = "x"
+        elif sym_type == SymbolType.PRIMITIVE:
+            # Try to guess from symbol name
+            base = symbol.name.rsplit("/", 1)[-1].replace(".sym", "")
+            prefix_map = {
+                "resistor": "R", "res": "R",
+                "capacitor": "C", "cap": "C", "capa": "C",
+                "inductor": "L", "ind": "L",
+                "voltage": "V", "vsource": "V",
+                "current": "I", "isource": "I",
+                "diode": "D",
+                "npn": "Q", "pnp": "Q",
+                "nmos": "M", "pmos": "M", "mosfet": "M",
+            }
+            prefix = prefix_map.get(base.lower(), base[0].upper() if base else "U")
+        elif sym_type in (SymbolType.LABEL, SymbolType.IPIN, SymbolType.OPIN, SymbolType.IOPIN):
+            prefix = "lab"
+        else:
+            prefix = "U"
+
+        # Find next available number
+        existing = set()
+        for inst in self._context.instances:
+            if inst.instname and inst.instname.startswith(prefix):
+                suffix = inst.instname[len(prefix):]
+                try:
+                    existing.add(int(suffix))
+                except ValueError:
+                    pass
+
+        n = 1
+        while n in existing:
+            n += 1
+        return f"{prefix}{n}"
 
     # -------------------------------------------------------------------------
     # Zoom box

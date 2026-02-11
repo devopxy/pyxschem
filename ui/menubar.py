@@ -504,7 +504,7 @@ class MenuBarSetup:
 
         action = menu.addAction("&Search")
         action.setShortcut("Ctrl+F")
-        # action.triggered.connect(...)
+        action.triggered.connect(self._window.show_search_dialog)
 
         action = menu.addAction("&Align")
         # action.triggered.connect(...)
@@ -530,11 +530,11 @@ class MenuBarSetup:
 
         action = menu.addAction("&Highlight selected nets")
         action.setShortcut("K")
-        # action.triggered.connect(...)
+        action.triggered.connect(self._window.highlight_selected_nets)
 
         action = menu.addAction("&Un-highlight all")
         action.setShortcut("Shift+K")
-        # action.triggered.connect(...)
+        action.triggered.connect(self._window.unhighlight_all)
 
     def _create_simulation_menu(self) -> None:
         """Create the Simulation menu."""

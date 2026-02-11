@@ -39,6 +39,8 @@ from pyxschem.ui.toolbar import ToolBarSetup
 from pyxschem.ui.statusbar import StatusBarSetup
 from pyxschem.ui.theme import apply_editor_theme, is_dark_theme
 from pyxschem.ui.widgets import TerminalConsoleDock
+from pyxschem.ui.edit_controller import EditController
+from pyxschem.ui.drawing_controller import DrawingController
 
 
 logger = logging.getLogger(__name__)
@@ -797,6 +799,30 @@ class MainWindow(QMainWindow):
         return None
 
     @property
+    def edit_controller(self) -> Optional[EditController]:
+        """Get the current tab's edit controller."""
+        canvas = self.canvas
+        if canvas and hasattr(canvas, '_edit_controller'):
+            return canvas._edit_controller
+        return None
+
+    @property
+    def drawing_controller(self) -> Optional[DrawingController]:
+        """Get the current tab's drawing controller."""
+        canvas = self.canvas
+        if canvas and hasattr(canvas, '_drawing_controller'):
+            return canvas._drawing_controller
+        return None
+
+    @property
+    def undo_stack(self):
+        """Get the current tab's undo stack."""
+        canvas = self.canvas
+        if canvas and hasattr(canvas, '_undo_stack'):
+            return canvas._undo_stack
+        return None
+
+    @property
     def layer_manager(self) -> LayerManager:
         """Get the layer manager."""
         return self._layer_manager
@@ -914,6 +940,14 @@ class MainWindow(QMainWindow):
         renderer = SchematicRenderer(canvas)
         renderer.context = context
         canvas._renderer = renderer  # Store reference
+
+        # Instantiate controllers and undo stack per tab
+        from pyxschem.commands.base import UndoStack
+        edit_ctrl = EditController(canvas, renderer, context)
+        draw_ctrl = DrawingController(canvas, renderer, context)
+        canvas._edit_controller = edit_ctrl
+        canvas._drawing_controller = draw_ctrl
+        canvas._undo_stack = UndoStack()
 
         # Connect canvas signals
         canvas.zoom_changed.connect(self._on_zoom_changed)
@@ -1140,8 +1174,11 @@ class MainWindow(QMainWindow):
     @Slot()
     def zoom_box(self) -> None:
         """Start zoom box selection mode."""
-        if self._context:
-            self._context.ui_state = UIState.STARTZOOM
+        dc = self.drawing_controller
+        if dc:
+            dc.start_zoom_box()
+            self.statusBar().showMessage("Click to start zoom box, click to finish")
+            self._set_active_tool("Zoom Box")
 
     @Slot()
     def toggle_grid(self) -> None:
@@ -1187,64 +1224,87 @@ class MainWindow(QMainWindow):
     @Slot()
     def undo(self) -> None:
         """Undo the last operation."""
-        # TODO: Implement undo stack
-        logger.warning("Undo requested but not implemented")
-        self.statusBar().showMessage("Undo not yet implemented", 2000)
+        canvas = self.canvas
+        if canvas and hasattr(canvas, '_undo_stack'):
+            desc = canvas._undo_stack.undo()
+            if desc:
+                self.statusBar().showMessage(f"Undone: {desc}", 2000)
+                self._update_tab_title()
+                return
+        self.statusBar().showMessage("Nothing to undo", 2000)
 
     @Slot()
     def redo(self) -> None:
         """Redo the last undone operation."""
-        # TODO: Implement redo
-        logger.warning("Redo requested but not implemented")
-        self.statusBar().showMessage("Redo not yet implemented", 2000)
+        canvas = self.canvas
+        if canvas and hasattr(canvas, '_undo_stack'):
+            desc = canvas._undo_stack.redo()
+            if desc:
+                self.statusBar().showMessage(f"Redone: {desc}", 2000)
+                self._update_tab_title()
+                return
+        self.statusBar().showMessage("Nothing to redo", 2000)
 
     @Slot()
     def cut(self) -> None:
         """Cut selected objects to clipboard."""
-        self.copy()
-        self.delete_selected()
+        ec = self.edit_controller
+        if ec:
+            ec.cut()
+            self._update_tab_title()
 
     @Slot()
     def copy(self) -> None:
         """Copy selected objects to clipboard."""
-        # TODO: Implement clipboard
-        logger.warning("Copy requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Copy not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.copy()
 
     @Slot()
     def paste(self) -> None:
         """Paste objects from clipboard."""
-        # TODO: Implement paste
-        logger.warning("Paste requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Paste not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.paste()
+            self._update_tab_title()
 
     @Slot()
     def delete_selected(self) -> None:
         """Delete selected objects."""
-        # TODO: Implement delete
-        logger.warning("Delete requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Delete not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec and ec.has_selection():
+            stack = self.undo_stack
+            if stack:
+                from pyxschem.commands.edit_commands import DeleteCommand
+                cmd = DeleteCommand(self._context, self._renderer)
+                stack.push(cmd)
+            else:
+                ec.delete()
+            self._update_tab_title()
 
     @Slot()
     def select_all(self) -> None:
         """Select all objects."""
-        # TODO: Implement select all
-        logger.warning("Select All requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Select all not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.select_all()
 
     @Slot()
     def deselect_all(self) -> None:
         """Deselect all objects."""
-        if self.canvas:
+        ec = self.edit_controller
+        if ec:
+            ec.deselect_all()
+        elif self.canvas:
             self.canvas.get_scene().clearSelection()
 
     @Slot()
     def duplicate(self) -> None:
         """Duplicate selected objects."""
-        if self._context:
-            self._context.ui_state = UIState.STARTCOPY
-            self._set_active_tool("Copy")
-            logger.info("UI state set to STARTCOPY")
+        ec = self.edit_controller
+        if ec:
+            ec.duplicate()
+            self._update_tab_title()
 
     @Slot()
     def move_selected(self) -> None:
@@ -1257,23 +1317,26 @@ class MainWindow(QMainWindow):
     @Slot()
     def rotate_selected(self) -> None:
         """Rotate selected objects 90 degrees."""
-        # TODO: Implement rotation
-        logger.warning("Rotate requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Rotate not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.rotate(90)
+            self._update_tab_title()
 
     @Slot()
     def flip_horizontal(self) -> None:
         """Flip selected objects horizontally."""
-        # TODO: Implement flip
-        logger.warning("Flip horizontal requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Flip horizontal not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.flip_horizontal()
+            self._update_tab_title()
 
     @Slot()
     def flip_vertical(self) -> None:
         """Flip selected objects vertically."""
-        # TODO: Implement flip
-        logger.warning("Flip vertical requested but not implemented in MainWindow")
-        self.statusBar().showMessage("Flip vertical not yet implemented", 2000)
+        ec = self.edit_controller
+        if ec:
+            ec.flip_vertical()
+            self._update_tab_title()
 
     # -------------------------------------------------------------------------
     # Drawing Operations
@@ -1282,56 +1345,56 @@ class MainWindow(QMainWindow):
     @Slot()
     def start_wire(self) -> None:
         """Start drawing a wire."""
-        if self._context:
-            self._context.ui_state = UIState.STARTWIRE
+        dc = self.drawing_controller
+        if dc:
+            dc.start_wire()
             self.statusBar().showMessage("Click to start wire, click to add points, double-click to finish")
             self._set_active_tool("Wire", "wire")
-            logger.info("UI state set to STARTWIRE")
 
     @Slot()
     def start_line(self) -> None:
         """Start drawing a line."""
-        if self._context:
-            self._context.ui_state = UIState.STARTLINE
+        dc = self.drawing_controller
+        if dc:
+            dc.start_line()
             self.statusBar().showMessage("Click to start line, click to end")
             self._set_active_tool("Line")
-            logger.info("UI state set to STARTLINE")
 
     @Slot()
     def start_rect(self) -> None:
         """Start drawing a rectangle."""
-        if self._context:
-            self._context.ui_state = UIState.STARTRECT
+        dc = self.drawing_controller
+        if dc:
+            dc.start_rect()
             self.statusBar().showMessage("Click to start rectangle, click to set opposite corner")
             self._set_active_tool("Rectangle")
-            logger.info("UI state set to STARTRECT")
 
     @Slot()
     def start_arc(self) -> None:
         """Start drawing an arc."""
-        if self._context:
-            self._context.ui_state = UIState.STARTARC
+        dc = self.drawing_controller
+        if dc:
+            dc.start_arc()
             self.statusBar().showMessage("Click to set center, drag to set radius")
             self._set_active_tool("Arc")
-            logger.info("UI state set to STARTARC")
 
     @Slot()
     def start_polygon(self) -> None:
         """Start drawing a polygon."""
-        if self._context:
-            self._context.ui_state = UIState.STARTPOLYGON
+        dc = self.drawing_controller
+        if dc:
+            dc.start_polygon()
             self.statusBar().showMessage("Click to add points, double-click to finish")
             self._set_active_tool("Polygon")
-            logger.info("UI state set to STARTPOLYGON")
 
     @Slot()
     def start_text(self) -> None:
         """Start placing text."""
-        if self._context:
-            self._context.ui_state = UIState.PLACE_TEXT
+        dc = self.drawing_controller
+        if dc:
+            dc.start_text()
             self.statusBar().showMessage("Click to place text")
             self._set_active_tool("Text", "text")
-            logger.info("UI state set to PLACE_TEXT")
 
     @Slot()
     def place_symbol(self) -> None:
@@ -1347,8 +1410,9 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             symbol_path = dialog.selected_symbol
             if symbol_path:
-                self._context.ui_state = UIState.PLACE_SYMBOL
-                # TODO: Load symbol and start placement
+                dc = self.drawing_controller
+                if dc:
+                    dc.start_symbol(symbol_path)
                 self.statusBar().showMessage(f"Click to place {symbol_path}")
                 self._set_active_tool("Component", "component")
                 logger.info("Symbol selected for placement: %s", symbol_path)
@@ -1392,13 +1456,57 @@ class MainWindow(QMainWindow):
     def edit_properties(self) -> None:
         """Edit properties of selected object."""
         from pyxschem.ui.dialogs import PropertyEditorDialog
+        from pyxschem.core.property_parser import get_tok_value
 
-        # TODO: Get selected object properties
-        dialog = PropertyEditorDialog(self)
-        if dialog.exec():
-            # TODO: Apply changes
-            logger.warning("Property edit accepted but apply path is not implemented")
-            pass
+        ec = self.edit_controller
+        if not ec:
+            return
+
+        # Priority: instances > wires > texts > schematic properties
+        selected_instances = ec.get_selected_instances()
+        if selected_instances:
+            inst = selected_instances[0]
+            dialog = PropertyEditorDialog(self, inst.prop_ptr or "", "Edit Instance Properties")
+            if dialog.exec():
+                inst.prop_ptr = dialog.text
+                instname = get_tok_value(dialog.text, "name")
+                if instname:
+                    inst.instname = instname
+                self._context.modified = True
+                self._renderer.render()
+                self._update_tab_title()
+                logger.info("Updated properties for instance '%s'", inst.instname or inst.name)
+            return
+
+        selected_wires = ec.get_selected_wires()
+        if selected_wires:
+            wire = selected_wires[0]
+            dialog = PropertyEditorDialog(self, wire.prop_ptr or "", "Edit Wire Properties")
+            if dialog.exec():
+                wire.prop_ptr = dialog.text
+                lab = get_tok_value(dialog.text, "lab")
+                if lab:
+                    wire.node = lab
+                self._context.modified = True
+                self._renderer.render()
+                self._update_tab_title()
+                logger.info("Updated wire properties")
+            return
+
+        selected_texts = ec.get_selected_texts()
+        if selected_texts:
+            text = selected_texts[0]
+            dialog = PropertyEditorDialog(self, text.txt_ptr or "", "Edit Text")
+            if dialog.exec():
+                text.txt_ptr = dialog.text
+                self._context.modified = True
+                self._renderer.render()
+                self._update_tab_title()
+                logger.info("Updated text content")
+            return
+
+        # Fallback: edit schematic properties
+        self.edit_schematic_properties()
 
     @Slot()
     def edit_schematic_properties(self) -> None:
@@ -1418,33 +1526,244 @@ class MainWindow(QMainWindow):
             logger.info("Updated schematic properties for '%s'", self._context.current_name or "untitled")
 
     # -------------------------------------------------------------------------
+    # Net Highlighting
+    # -------------------------------------------------------------------------
+
+    @Slot()
+    def highlight_selected_nets(self) -> None:
+        """Highlight all wires on the same net as selected wires/instances."""
+        if not self._context:
+            return
+
+        ec = self.edit_controller
+        if not ec:
+            return
+
+        # Run connectivity to get net assignments
+        from pyxschem.netlist.connectivity import ConnectivityAnalyzer
+        analyzer = ConnectivityAnalyzer(self._context)
+        net_map = analyzer.analyze()
+
+        # Collect net names from selected wires
+        nets_to_highlight = set()
+        for wire in ec.get_selected_wires():
+            if wire.node:
+                nets_to_highlight.add(wire.node)
+
+        # Also from selected instance pins
+        for inst in ec.get_selected_instances():
+            if inst.node:
+                for node in inst.node:
+                    if node:
+                        nets_to_highlight.add(node)
+
+        if not nets_to_highlight:
+            self.statusBar().showMessage("No nets to highlight", 2000)
+            return
+
+        # Highlight wires belonging to those nets
+        from pyxschem.core.primitives import SelectionState
+        count = 0
+        for wire in self._context.wires:
+            if wire.node in nets_to_highlight:
+                wire.sel = SelectionState.SELECTED
+                count += 1
+
+        if self._renderer:
+            self._renderer.render()
+        self.statusBar().showMessage(f"Highlighted {count} wires on {len(nets_to_highlight)} net(s)", 3000)
+        logger.info("Highlighted %d wires on nets: %s", count, nets_to_highlight)
+
+    @Slot()
+    def unhighlight_all(self) -> None:
+        """Remove all net highlights."""
+        ec = self.edit_controller
+        if ec:
+            ec.deselect_all()
+        self.statusBar().showMessage("Highlights cleared", 2000)
+
+    # -------------------------------------------------------------------------
+    # Search
+    # -------------------------------------------------------------------------
+
+    @Slot()
+    def show_search_dialog(self) -> None:
+        """Show the search dialog."""
+        from pyxschem.ui.dialogs import SearchDialog
+        from pyxschem.core.primitives import SelectionState
+        from PySide6.QtCore import QPointF
+
+        dialog = SearchDialog(self, self._context)
+
+        def goto_result(r_type, r_idx):
+            ec = self.edit_controller
+            if ec:
+                ec.deselect_all()
+
+            if r_type == "instance" and r_idx < len(self._context.instances):
+                inst = self._context.instances[r_idx]
+                inst.sel = SelectionState.SELECTED
+                if self.canvas:
+                    self.canvas.center_on_point(QPointF(inst.x0, inst.y0))
+            elif r_type == "wire" and r_idx < len(self._context.wires):
+                wire = self._context.wires[r_idx]
+                wire.sel = SelectionState.SELECTED
+                if self.canvas:
+                    cx = (wire.x1 + wire.x2) / 2
+                    cy = (wire.y1 + wire.y2) / 2
+                    self.canvas.center_on_point(QPointF(cx, cy))
+            elif r_type == "text" and r_idx < len(self._context.texts):
+                text = self._context.texts[r_idx]
+                text.sel = SelectionState.SELECTED
+                if self.canvas:
+                    self.canvas.center_on_point(QPointF(text.x0, text.y0))
+
+            if self._renderer:
+                self._renderer.render()
+
+        dialog.goto_result.connect(goto_result)
+        dialog.exec()
+
+    # -------------------------------------------------------------------------
     # Hierarchy Navigation
     # -------------------------------------------------------------------------
 
     @Slot()
     def descend_schematic(self) -> None:
         """Descend into selected instance's schematic."""
-        # TODO: Implement hierarchy navigation
-        logger.warning("Descend schematic requested but not implemented")
-        self.statusBar().showMessage("Descend not yet implemented", 2000)
+        if not self._context:
+            return
+
+        ec = self.edit_controller
+        if not ec:
+            return
+
+        selected = ec.get_selected_instances()
+        if not selected:
+            self.statusBar().showMessage("Select an instance to descend into", 2000)
+            return
+
+        inst = selected[0]
+        # Derive .sch path from .sym path
+        sym_path = inst.name
+        sch_path = sym_path.replace(".sym", ".sch")
+
+        # Try to resolve the path
+        from pyxschem.core.symbol_loader import SymbolLoader
+        loader = SymbolLoader()
+        resolved = loader.resolve_symbol_path(sch_path, self._context)
+        if resolved is None:
+            # Try without replacement - maybe it's already a .sch
+            resolved = loader.resolve_symbol_path(sym_path, self._context)
+        if resolved is None:
+            self.statusBar().showMessage(f"Cannot find schematic for {inst.name}", 3000)
+            return
+
+        import os
+        if not os.path.isfile(resolved):
+            self.statusBar().showMessage(f"File not found: {resolved}", 3000)
+            return
+
+        # Save current state and descend
+        inst_path = inst.instname or inst.name
+        self._context.push_hierarchy(resolved, inst_path)
+
+        # Load the sub-schematic
+        try:
+            from pyxschem.io.schematic_reader import read_schematic
+            sub_ctx = read_schematic(resolved)
+
+            # Replace context contents with sub-schematic
+            self._context.wires = sub_ctx.wires
+            self._context.texts = sub_ctx.texts
+            self._context.rects = sub_ctx.rects
+            self._context.lines = sub_ctx.lines
+            self._context.arcs = sub_ctx.arcs
+            self._context.polygons = sub_ctx.polygons
+            self._context.instances = sub_ctx.instances
+            self._context.symbols = sub_ctx.symbols
+            self._context.symbol_map = sub_ctx.symbol_map
+            self._context.schprop = sub_ctx.schprop
+            self._context.sym_prop = sub_ctx.sym_prop
+
+            if self._renderer:
+                self._renderer.render()
+            self._update_window_title()
+            self.statusBar().showMessage(f"Descended into {inst_path}", 3000)
+            logger.info("Descended into '%s' (depth=%d)", resolved, self._context.hierarchy_depth)
+        except Exception as e:
+            # Roll back hierarchy push
+            self._context.pop_hierarchy()
+            self.statusBar().showMessage(f"Error: {e}", 5000)
+            logger.error("Failed to descend into '%s': %s", resolved, e)
 
     @Slot()
     def descend_symbol(self) -> None:
-        """Descend into selected instance's symbol."""
-        # TODO: Implement hierarchy navigation
-        logger.warning("Descend symbol requested but not implemented")
-        self.statusBar().showMessage("Descend symbol not yet implemented", 2000)
+        """Descend into selected instance's symbol definition."""
+        if not self._context:
+            return
+
+        ec = self.edit_controller
+        if not ec:
+            return
+
+        selected = ec.get_selected_instances()
+        if not selected:
+            self.statusBar().showMessage("Select an instance to view its symbol", 2000)
+            return
+
+        inst = selected[0]
+        sym_path = inst.name
+
+        from pyxschem.core.symbol_loader import SymbolLoader
+        loader = SymbolLoader()
+        resolved = loader.resolve_symbol_path(sym_path, self._context)
+        if resolved:
+            from pathlib import Path
+            self.open_file(Path(resolved))
+        else:
+            self.statusBar().showMessage(f"Cannot find symbol: {sym_path}", 3000)
 
     @Slot()
     def go_back(self) -> None:
         """Go back up one level in hierarchy."""
-        if self._context and self._context.pop_hierarchy():
-            # TODO: Reload parent schematic
-            self._update_window_title()
-            logger.info("Hierarchy pop successful; depth=%d", self._context.hierarchy_depth)
-        else:
+        if not self._context:
+            self.statusBar().showMessage("No active context", 2000)
+            return
+
+        if not self._context.hierarchy_stack:
             self.statusBar().showMessage("Already at top level", 2000)
-            logger.info("Hierarchy pop requested at top level")
+            return
+
+        # Get parent schematic path before popping
+        parent_path = self._context.hierarchy_stack[-1].schematic_path
+
+        if self._context.pop_hierarchy():
+            try:
+                from pyxschem.io.schematic_reader import read_schematic
+                parent_ctx = read_schematic(parent_path)
+
+                # Restore parent context contents
+                self._context.wires = parent_ctx.wires
+                self._context.texts = parent_ctx.texts
+                self._context.rects = parent_ctx.rects
+                self._context.lines = parent_ctx.lines
+                self._context.arcs = parent_ctx.arcs
+                self._context.polygons = parent_ctx.polygons
+                self._context.instances = parent_ctx.instances
+                self._context.symbols = parent_ctx.symbols
+                self._context.symbol_map = parent_ctx.symbol_map
+                self._context.schprop = parent_ctx.schprop
+                self._context.sym_prop = parent_ctx.sym_prop
+
+                if self._renderer:
+                    self._renderer.render()
+                self._update_window_title()
+                self.statusBar().showMessage(f"Returned to {self._context.filename}", 3000)
+                logger.info("Returned to '%s' (depth=%d)", parent_path, self._context.hierarchy_depth)
+            except Exception as e:
+                self.statusBar().showMessage(f"Error: {e}", 5000)
+                logger.error("Failed to reload parent '%s': %s", parent_path, e)
 
     # -------------------------------------------------------------------------
     # Netlisting
@@ -1453,9 +1772,45 @@ class MainWindow(QMainWindow):
     @Slot()
     def generate_netlist(self) -> None:
         """Generate netlist for current schematic."""
-        # TODO: Implement netlisting
-        logger.warning("Netlist generation requested but not implemented")
-        self.statusBar().showMessage("Netlist generation not yet implemented", 2000)
+        if not self._context:
+            self.statusBar().showMessage("No schematic loaded", 2000)
+            return
+
+        try:
+            if self._netlist_type == NetlistType.SPICE:
+                from pyxschem.netlist.spice_netlister import SpiceNetlister
+                netlister = SpiceNetlister(self._context)
+            elif self._netlist_type == NetlistType.VERILOG:
+                from pyxschem.netlist.verilog_netlister import VerilogNetlister
+                netlister = VerilogNetlister(self._context)
+            elif self._netlist_type == NetlistType.VHDL:
+                from pyxschem.netlist.vhdl_netlister import VhdlNetlister
+                netlister = VhdlNetlister(self._context)
+            else:
+                self.statusBar().showMessage(f"Unsupported netlist type", 2000)
+                return
+
+            netlist = netlister.generate()
+
+            # Determine output filename
+            sch_path = self._context.current_name or "untitled.sch"
+            ext_map = {NetlistType.SPICE: ".spice", NetlistType.VERILOG: ".v", NetlistType.VHDL: ".vhdl"}
+            ext = ext_map.get(self._netlist_type, ".net")
+            out_path = sch_path.rsplit(".", 1)[0] + ext
+
+            from PySide6.QtWidgets import QFileDialog
+            out_path, _ = QFileDialog.getSaveFileName(
+                self, "Save Netlist", out_path,
+                f"Netlist (*{ext});;All Files (*)"
+            )
+            if out_path:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(netlist)
+                self.statusBar().showMessage(f"Netlist saved to {out_path}", 5000)
+                logger.info("Netlist saved to '%s'", out_path)
+        except Exception as e:
+            logger.error("Netlist generation failed: %s", e)
+            self.statusBar().showMessage(f"Netlist error: {e}", 5000)
 
     @Slot()
     def set_netlist_type_spice(self) -> None:
@@ -1614,6 +1969,9 @@ class MainWindow(QMainWindow):
 
         # Escape key cancels current operation
         if key == Qt.Key_Escape:
+            dc = self.drawing_controller
+            if dc and dc.is_drawing:
+                dc.cancel()
             if self._context:
                 self._context.ui_state = UIState.NONE
             self.deselect_all()

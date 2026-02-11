@@ -329,7 +329,7 @@ class SchematicCanvas(QGraphicsView):
         logger.debug("Wheel zoom updated to %.6f", self._zoom)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse press for pan and selection."""
+        """Handle mouse press for pan, drawing, and selection."""
         if event.button() == Qt.MiddleButton:
             # Start panning
             self._panning = True
@@ -348,6 +348,16 @@ class SchematicCanvas(QGraphicsView):
                 self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
                 logger.debug("Panning started with Ctrl+LeftButton")
+            elif (hasattr(self, '_drawing_controller') and self._drawing_controller
+                  and self._drawing_controller.is_drawing):
+                # Delegate to drawing controller
+                scene_pos = self.mapToScene(event.position().toPoint())
+                handled = self._drawing_controller.handle_mouse_press(
+                    scene_pos, event.button(), event.modifiers()
+                )
+                if handled:
+                    event.accept()
+                    return
             else:
                 # Start rubber-band selection
                 self._selection_start = event.position()
@@ -367,7 +377,7 @@ class SchematicCanvas(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Handle mouse move for pan and selection."""
+        """Handle mouse move for pan, drawing, and selection."""
         # Emit cursor position
         world_pos = self.mapToScene(event.position().toPoint())
         self.cursor_moved.emit(world_pos.x(), world_pos.y())
@@ -379,6 +389,12 @@ class SchematicCanvas(QGraphicsView):
 
             # Translate the view
             self.translate(delta.x() / self._zoom, delta.y() / self._zoom)
+            event.accept()
+
+        elif (hasattr(self, '_drawing_controller') and self._drawing_controller
+              and self._drawing_controller.is_drawing):
+            # Delegate to drawing controller for rubber-band preview
+            self._drawing_controller.handle_mouse_move(world_pos)
             event.accept()
 
         elif self._selecting and self._rubber_band:
@@ -431,6 +447,19 @@ class SchematicCanvas(QGraphicsView):
 
         else:
             super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """Handle mouse double-click for finishing drawing operations."""
+        if (hasattr(self, '_drawing_controller') and self._drawing_controller
+                and self._drawing_controller.is_drawing):
+            scene_pos = self.mapToScene(event.position().toPoint())
+            handled = self._drawing_controller.handle_mouse_double_click(
+                scene_pos, event.button()
+            )
+            if handled:
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Handle keyboard shortcuts."""
@@ -565,6 +594,21 @@ class SchematicCanvas(QGraphicsView):
             if item.flags() & item.ItemIsSelectable:
                 item.setSelected(True)
         self.selection_changed.emit()
+
+    def fit_to_rect(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        """
+        Fit the view to a specific rectangle defined by two corner points.
+
+        Args:
+            x1, y1: First corner in world coordinates
+            x2, y2: Second corner in world coordinates
+        """
+        rect = QRectF(
+            min(x1, x2), min(y1, y2),
+            abs(x2 - x1), abs(y2 - y1)
+        )
+        if not rect.isEmpty():
+            self.fit_in_view(rect, margin=10)
 
     def get_visible_rect(self) -> QRectF:
         """Get the currently visible rectangle in world coordinates."""

@@ -11,9 +11,11 @@ This package provides all dialog windows:
 from pyxschem.ui.dialogs.property_editor import PropertyEditorDialog
 from pyxschem.ui.dialogs.symbol_chooser import SymbolChooserDialog
 from pyxschem.ui.dialogs.text_input import TextInputDialog
+from pyxschem.ui.dialogs.search_dialog import SearchDialog
 
 __all__ = [
     "PropertyEditorDialog",
     "SymbolChooserDialog",
     "TextInputDialog",
+    "SearchDialog",
 ]
