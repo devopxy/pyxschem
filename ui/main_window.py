@@ -11,7 +11,6 @@ The MainWindow is the central application window containing:
 
 from pathlib import Path
 from typing import Optional, List
-import os
 import logging
 
 from PySide6.QtCore import Qt, Signal, Slot, QSettings
@@ -19,14 +18,14 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QFileDialog,
     QMessageBox,
     QDockWidget,
     QTabWidget,
-    QApplication,
+    QPushButton,
+    QStyle,
 )
-from PySide6.QtGui import QKeySequence, QCloseEvent, QAction
+from PySide6.QtGui import QCloseEvent
 
 from pyxschem.core.context import SchematicContext, UIState, NetlistType
 from pyxschem.graphics import SchematicCanvas, SchematicRenderer, LayerManager
@@ -34,6 +33,7 @@ from pyxschem.io import read_schematic, write_schematic
 from pyxschem.ui.menubar import MenuBarSetup
 from pyxschem.ui.toolbar import ToolBarSetup
 from pyxschem.ui.statusbar import StatusBarSetup
+from pyxschem.ui.theme import apply_editor_theme, is_dark_theme
 
 
 logger = logging.getLogger(__name__)
@@ -73,18 +73,23 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("PyXSchem", "PyXSchem")
 
         # UI mode flags
+        self._ui_theme = "dark"
         self._dark_scheme = True
         self._show_grid = True
         self._snap_to_grid = True
         self._netlist_type = NetlistType.SPICE
+        self._current_tool_name = "Select"
+        self._simulation_running = False
+        self._has_wave_results = False
+        self._sim_profile_exists = False
 
         # Initialize components
         self._setup_layer_manager()
         self._setup_central_widget()
-        self._setup_menu_bar()
         self._setup_toolbar()
-        self._setup_status_bar()
         self._setup_dock_widgets()
+        self._setup_menu_bar()
+        self._setup_status_bar()
 
         # Load settings
         self._load_settings()
@@ -92,9 +97,20 @@ class MainWindow(QMainWindow):
         # Connect signals
         self._connect_signals()
 
+        # Apply UI styling after widgets are created.
+        self._apply_modern_theme()
+
         # Create new empty schematic
         self.new_schematic()
-        logger.info("MainWindow initialized (dark_scheme=%s, show_grid=%s)", self._dark_scheme, self._show_grid)
+        self._sync_status_indicators()
+        self._refresh_simulation_action_states()
+        logger.info(
+            "MainWindow initialized (theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            self._ui_theme,
+            self._dark_scheme,
+            self._show_grid,
+            self._snap_to_grid,
+        )
 
     def _setup_layer_manager(self) -> None:
         """Initialize the layer manager."""
@@ -102,6 +118,11 @@ class MainWindow(QMainWindow):
 
     def _setup_central_widget(self) -> None:
         """Set up the central widget with tabbed schematic views."""
+        self._central_container = QWidget()
+        central_layout = QVBoxLayout(self._central_container)
+        central_layout.setContentsMargins(8, 6, 8, 8)
+        central_layout.setSpacing(6)
+
         # Tab widget for multiple schematics
         self._tab_widget = QTabWidget()
         self._tab_widget.setTabsClosable(True)
@@ -109,8 +130,9 @@ class MainWindow(QMainWindow):
         self._tab_widget.setDocumentMode(True)
         self._tab_widget.tabCloseRequested.connect(self._on_tab_close_requested)
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
+        central_layout.addWidget(self._tab_widget, 1)
 
-        self.setCentralWidget(self._tab_widget)
+        self.setCentralWidget(self._central_container)
 
     def _setup_menu_bar(self) -> None:
         """Set up the menu bar."""
@@ -129,17 +151,118 @@ class MainWindow(QMainWindow):
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels."""
-        # Placeholder for future dock widgets:
-        # - Hierarchy browser
-        # - Property panel
-        # - Library browser
-        logger.debug("Dock widgets setup placeholder invoked")
-        pass
+        self._create_workflow_dock()
+
+    def _create_workflow_dock(self) -> None:
+        """Create a compact IC workflow palette."""
+        dock = QDockWidget("Workflow", self)
+        dock.setObjectName("workflow_dock")
+        dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        dock.setFeatures(
+            QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable
+        )
+        dock.setMinimumWidth(184)
+
+        panel = QWidget()
+        panel.setObjectName("workflow_panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        self._add_workflow_button(
+            layout,
+            "Place Symbol",
+            self.place_symbol,
+            QStyle.SP_FileDialogDetailedView,
+        )
+        self._add_workflow_button(
+            layout,
+            "Wire Route",
+            self.start_wire,
+            QStyle.SP_ArrowRight,
+        )
+        self._add_workflow_button(
+            layout,
+            "Line / Annotation",
+            self.start_line,
+            QStyle.SP_FileDialogListView,
+        )
+        self._add_workflow_button(
+            layout,
+            "Text Label",
+            self.start_text,
+            QStyle.SP_FileDialogContentsView,
+        )
+        self._add_workflow_button(
+            layout,
+            "Edit Properties",
+            self.edit_properties,
+            QStyle.SP_FileDialogInfoView,
+        )
+        self._add_workflow_button(
+            layout,
+            "Generate Netlist",
+            self.generate_netlist,
+            QStyle.SP_ArrowRight,
+        )
+        self._add_workflow_button(
+            layout,
+            "Run Simulation",
+            self.run_simulation,
+            QStyle.SP_MediaPlay,
+        )
+        self._add_workflow_button(
+            layout,
+            "Open Waves",
+            self.open_waves,
+            QStyle.SP_MediaPlay,
+        )
+        layout.addStretch(1)
+
+        dock.setWidget(panel)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        self._workflow_dock = dock
+        logger.debug("Workflow dock initialized")
+
+    def _add_workflow_button(
+        self,
+        layout: QVBoxLayout,
+        text: str,
+        slot,
+        standard_icon: QStyle.StandardPixmap,
+    ) -> None:
+        """Add a styled workflow button to the side panel."""
+        button = QPushButton(text)
+        button.setObjectName("workflow_btn")
+        button.setIcon(self.style().standardIcon(standard_icon))
+        button.setCursor(Qt.PointingHandCursor)
+        button.clicked.connect(slot)
+        layout.addWidget(button)
+
+    def _apply_modern_theme(self) -> None:
+        """Apply selected visual styling and synchronize canvas scheme."""
+        self._ui_theme = apply_editor_theme(self, self._ui_theme)
+        self._dark_scheme = is_dark_theme(self._ui_theme)
+        self._layer_manager.dark_scheme = self._dark_scheme
+        self._apply_canvas_scheme(self._dark_scheme)
+        logger.debug("Theme applied: %s", self._ui_theme)
 
     def _connect_signals(self) -> None:
         """Connect internal signals."""
         logger.debug("Internal signal wiring placeholder invoked")
         pass
+
+    def _apply_canvas_scheme(self, dark_scheme: bool) -> None:
+        """Apply dark/light scheme to all open canvases."""
+        self._layer_manager.dark_scheme = dark_scheme
+        for i in range(self._tab_widget.count()):
+            canvas = self._tab_widget.widget(i)
+            if isinstance(canvas, SchematicCanvas):
+                canvas.set_dark_scheme(dark_scheme)
+                if hasattr(canvas, "_renderer"):
+                    canvas._renderer.render()
 
     def _load_settings(self) -> None:
         """Load application settings."""
@@ -157,16 +280,71 @@ class MainWindow(QMainWindow):
         if isinstance(self._recent_files, str):
             self._recent_files = [self._recent_files] if self._recent_files else []
 
-        # Color scheme
-        self._dark_scheme = self._settings.value("darkScheme", True, type=bool)
+        # UI theme and color scheme (darkScheme kept for compatibility).
+        theme_raw = self._settings.value("ui/theme", "", type=str)
+        if theme_raw:
+            self._ui_theme = theme_raw
+        else:
+            legacy_dark = self._settings.value("darkScheme", True, type=bool)
+            self._ui_theme = "dark" if legacy_dark else "light"
+
+        self._dark_scheme = is_dark_theme(self._ui_theme)
         self._layer_manager.dark_scheme = self._dark_scheme
 
         # Grid settings
         self._show_grid = self._settings.value("showGrid", True, type=bool)
         self._snap_to_grid = self._settings.value("snapToGrid", True, type=bool)
+        if hasattr(self, "_toolbar_setup"):
+            self._toolbar_setup.update_grid_button(self._show_grid)
+            self._toolbar_setup.update_snap_button(self._snap_to_grid)
+
+            # Toolbar style persistence must tolerate different PySide enum behaviors:
+            # - int-like enum values
+            # - enum objects
+            # - string names from older/newer settings formats
+            default_style = Qt.ToolButtonTextUnderIcon
+            default_style_value = getattr(default_style, "value", default_style)
+            style_raw = self._settings.value("toolbar/style", default_style_value)
+            style_name_raw = self._settings.value("toolbar/styleName", "")
+
+            resolved_style = default_style
+            try:
+                if hasattr(style_raw, "value"):
+                    style_raw = style_raw.value
+                resolved_style = Qt.ToolButtonStyle(int(style_raw))
+            except (TypeError, ValueError):
+                enum_candidate = None
+                if isinstance(style_raw, str):
+                    enum_candidate = getattr(Qt.ToolButtonStyle, style_raw, None)
+                if enum_candidate is None and isinstance(style_name_raw, str):
+                    enum_candidate = getattr(Qt.ToolButtonStyle, style_name_raw, None)
+                if enum_candidate is not None:
+                    resolved_style = enum_candidate
+
+            icon_size = self._settings.value("toolbar/iconSize", 20, type=int)
+            self._toolbar_setup.set_tool_button_style(resolved_style)
+            self._toolbar_setup.set_icon_size(icon_size)
+
+            self._toolbar_setup.set_visibility(
+                quick=self._settings.value("toolbar/quickVisible", True, type=bool),
+                draw=self._settings.value("toolbar/drawVisible", True, type=bool),
+                sim=self._settings.value("toolbar/simVisible", True, type=bool),
+            )
+
+        if hasattr(self, "_menu_setup"):
+            self._menu_setup.update_grid_action(self._show_grid)
+            self._menu_setup.update_snap_action(self._snap_to_grid)
+            self._menu_setup.update_theme_actions(self._ui_theme)
+
+        if hasattr(self, "_workflow_dock"):
+            self._workflow_dock.setVisible(
+                self._settings.value("dock/workflowVisible", True, type=bool)
+            )
+        self._sync_status_indicators()
         logger.info(
-            "Settings loaded (recent_files=%d, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            "Settings loaded (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
             len(self._recent_files),
+            self._ui_theme,
             self._dark_scheme,
             self._show_grid,
             self._snap_to_grid,
@@ -177,16 +355,236 @@ class MainWindow(QMainWindow):
         self._settings.setValue("geometry", self.saveGeometry())
         self._settings.setValue("windowState", self.saveState())
         self._settings.setValue("recentFiles", self._recent_files[:self.MAX_RECENT_FILES])
+        self._settings.setValue("ui/theme", self._ui_theme)
         self._settings.setValue("darkScheme", self._dark_scheme)
         self._settings.setValue("showGrid", self._show_grid)
         self._settings.setValue("snapToGrid", self._snap_to_grid)
+        if hasattr(self, "_toolbar_setup"):
+            style_enum = self._toolbar_setup.current_tool_button_style()
+            style_name = getattr(style_enum, "name", "")
+            style_value = getattr(style_enum, "value", None)
+            if style_value is None:
+                style_value = style_name or str(style_enum)
+            self._settings.setValue(
+                "toolbar/style",
+                style_value,
+            )
+            self._settings.setValue("toolbar/styleName", style_name)
+            self._settings.setValue("toolbar/iconSize", self._toolbar_setup.current_icon_size())
+
+            visibility = self._toolbar_setup.visibility_map()
+            self._settings.setValue("toolbar/quickVisible", visibility["quick"])
+            self._settings.setValue("toolbar/drawVisible", visibility["draw"])
+            self._settings.setValue("toolbar/simVisible", visibility["sim"])
+
+        if hasattr(self, "_workflow_dock"):
+            self._settings.setValue("dock/workflowVisible", self._workflow_dock.isVisible())
         logger.info(
-            "Settings saved (recent_files=%d, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
+            "Settings saved (recent_files=%d, theme=%s, dark_scheme=%s, show_grid=%s, snap_to_grid=%s)",
             len(self._recent_files),
+            self._ui_theme,
             self._dark_scheme,
             self._show_grid,
             self._snap_to_grid,
         )
+
+    @Slot()
+    def run_simulation(self) -> None:
+        """Trigger simulation run (placeholder until backend integration)."""
+        if not self._sim_profile_exists:
+            self.statusBar().showMessage("Simulation profile not found in schematic properties", 2600)
+            logger.warning("Simulation run blocked: no simulation profile")
+            return
+
+        self._simulation_running = True
+        self._status_setup.update_mode(self._netlist_mode_name())
+        self._status_setup.update_simulation("Running")
+        self._refresh_simulation_action_states()
+        self.statusBar().showMessage("Simulation started (placeholder backend)", 1800)
+        logger.info("Simulation run started")
+
+        # Backend integration is pending; mark placeholder completion.
+        self._simulation_running = False
+        self._has_wave_results = True
+        self._status_setup.update_simulation("Results")
+        self._refresh_simulation_action_states()
+        self.statusBar().showMessage("Simulation completed (placeholder), probe enabled", 2800)
+        logger.info("Simulation run completed (placeholder)")
+
+    @Slot()
+    def stop_simulation(self) -> None:
+        """Stop a running simulation session."""
+        if not self._simulation_running:
+            self.statusBar().showMessage("No active simulation to stop", 1800)
+            logger.info("Stop simulation requested with no active run")
+            return
+
+        self._simulation_running = False
+        self._status_setup.update_simulation("Stopped")
+        self._refresh_simulation_action_states()
+        self.statusBar().showMessage("Simulation stopped", 1800)
+        logger.info("Simulation stopped by user")
+
+    @Slot()
+    def open_waves(self) -> None:
+        """Open waveform viewer (placeholder until backend integration)."""
+        if not self._has_wave_results:
+            self.statusBar().showMessage("No simulation results loaded", 2200)
+            logger.warning("Open waves requested without results")
+            return
+
+        self.statusBar().showMessage("Waveform viewer not yet implemented", 2400)
+        self._status_setup.update_mode(self._netlist_mode_name())
+        logger.warning("Open waves requested but not implemented")
+
+    def _set_active_tool(self, tool_name: str, toolbar_key: str | None = None) -> None:
+        """Update active tool labels and sticky toolbar highlight."""
+        self._current_tool_name = tool_name
+        self._status_setup.update_tool(tool_name)
+        if toolbar_key:
+            self._toolbar_setup.set_active_tool(toolbar_key)
+        else:
+            self._toolbar_setup.clear_active_tool()
+
+    def _clear_active_tool(self) -> None:
+        """Reset active tool indicators to the default pointer/select mode."""
+        self._current_tool_name = "Select"
+        self._status_setup.update_tool(self._current_tool_name)
+        self._toolbar_setup.clear_active_tool()
+
+    def _has_simulation_profile(self) -> bool:
+        """Detect if the active schematic contains simulation directives."""
+        if self._context is None:
+            return False
+
+        blobs = [
+            self._context.schprop or "",
+            self._context.verilog_prop or "",
+            self._context.vhdl_prop or "",
+            self._context.spectre_prop or "",
+        ]
+        text = "\n".join(blobs).lower()
+        directives = (".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".pz")
+        return any(token in text for token in directives)
+
+    def _refresh_simulation_action_states(self) -> None:
+        """Refresh run/probe action availability from current context state."""
+        self._sim_profile_exists = self._has_simulation_profile()
+        run_enabled = self._sim_profile_exists and not self._simulation_running
+        probe_enabled = self._has_wave_results and not self._simulation_running
+        stop_enabled = self._simulation_running
+
+        if hasattr(self, "_toolbar_setup"):
+            self._toolbar_setup.set_simulation_action_state(
+                run_enabled=run_enabled,
+                probe_enabled=probe_enabled,
+                stop_enabled=stop_enabled,
+            )
+        if hasattr(self, "_menu_setup"):
+            self._menu_setup.set_simulation_actions_state(
+                run_enabled=run_enabled,
+                probe_enabled=probe_enabled,
+                stop_enabled=stop_enabled,
+            )
+
+        if self._simulation_running:
+            sim_state = "Running"
+        elif self._has_wave_results:
+            sim_state = "Results"
+        elif self._sim_profile_exists:
+            sim_state = "Ready"
+        else:
+            sim_state = "No Profile"
+        self._status_setup.update_simulation(sim_state)
+
+    def _sync_status_indicators(self) -> None:
+        """Sync status bar and menu/toolbar toggles with current state flags."""
+        self._status_setup.update_grid(self._show_grid)
+        self._status_setup.update_snap(self._snap_to_grid)
+        self._status_setup.update_tool(self._current_tool_name)
+        self._status_setup.update_mode(self._netlist_mode_name())
+        if hasattr(self, "_menu_setup"):
+            self._menu_setup.update_grid_action(self._show_grid)
+            self._menu_setup.update_snap_action(self._snap_to_grid)
+        if hasattr(self, "_toolbar_setup"):
+            self._toolbar_setup.update_grid_button(self._show_grid)
+            self._toolbar_setup.update_snap_button(self._snap_to_grid)
+
+    def _netlist_mode_name(self) -> str:
+        """Return display label for the selected netlist format."""
+        if self._netlist_type == NetlistType.VERILOG:
+            return "Verilog"
+        if self._netlist_type == NetlistType.VHDL:
+            return "VHDL"
+        return "SPICE"
+
+    def set_ui_theme(self, theme_name: str) -> None:
+        """Apply a named UI theme and synchronize canvas colors."""
+        self._ui_theme = theme_name
+        self._apply_modern_theme()
+        self._sync_status_indicators()
+        logger.info("UI theme changed to %s", self._ui_theme)
+
+    @Slot()
+    def set_theme_dark(self) -> None:
+        """Apply the dark editor theme."""
+        self.set_ui_theme("dark")
+
+    @Slot()
+    def set_theme_light(self) -> None:
+        """Apply the light editor theme."""
+        self.set_ui_theme("light")
+
+    @Slot()
+    def open_simulation_settings(self) -> None:
+        """Open simulation settings dialog (placeholder)."""
+        self.statusBar().showMessage("Simulation settings dialog not yet implemented", 2400)
+        logger.warning("Simulation settings requested but not implemented")
+
+    @Slot()
+    def run_erc_drc(self) -> None:
+        """Run ERC/DRC checks (placeholder)."""
+        self.statusBar().showMessage("ERC/DRC checks not yet implemented", 2400)
+        logger.warning("ERC/DRC requested but not implemented")
+
+    @Slot()
+    def measure_distance(self) -> None:
+        """Measure distance tool (placeholder)."""
+        self.statusBar().showMessage("Distance measurement tool not yet implemented", 2400)
+        logger.warning("Measure distance requested but not implemented")
+
+    @Slot()
+    def view_generated_netlist(self) -> None:
+        """Open generated netlist view (placeholder)."""
+        self.statusBar().showMessage("Generated netlist view not yet implemented", 2400)
+        logger.warning("View netlist requested but not implemented")
+
+    @Slot()
+    def open_documentation(self) -> None:
+        """Open documentation entry point."""
+        QMessageBox.information(
+            self,
+            "Documentation",
+            "Documentation integration is not wired yet.\nUse README.md for current usage notes.",
+        )
+        logger.info("Documentation dialog shown")
+
+    @Slot()
+    def show_about_dialog(self) -> None:
+        """Show application about dialog."""
+        QMessageBox.about(
+            self,
+            "About PyXSchem",
+            "<h3>PyXSchem</h3>"
+            "<p>Modern schematic editor interface and simulator shell.</p>",
+        )
+        logger.info("About dialog shown")
+
+    @Slot()
+    def export_design(self) -> None:
+        """Export command placeholder for netlist/image transfers."""
+        self.statusBar().showMessage("Export pipeline not yet implemented", 2400)
+        logger.warning("Export requested but not implemented")
 
     # -------------------------------------------------------------------------
     # Properties
@@ -218,6 +616,21 @@ class MainWindow(QMainWindow):
         """Get the layer manager."""
         return self._layer_manager
 
+    @property
+    def workflow_dock(self) -> Optional[QDockWidget]:
+        """Get the workflow dock panel."""
+        return getattr(self, "_workflow_dock", None)
+
+    @property
+    def ui_theme(self) -> str:
+        """Get current UI theme key."""
+        return self._ui_theme
+
+    @property
+    def snap_to_grid_enabled(self) -> bool:
+        """Return whether snap-to-grid is enabled."""
+        return self._snap_to_grid
+
     # -------------------------------------------------------------------------
     # File Operations
     # -------------------------------------------------------------------------
@@ -227,6 +640,10 @@ class MainWindow(QMainWindow):
         """Create a new empty schematic."""
         context = SchematicContext()
         self._add_schematic_tab(context, "Untitled")
+        self._has_wave_results = False
+        self._clear_active_tool()
+        self._status_setup.update_mode(self._netlist_mode_name())
+        self._refresh_simulation_action_states()
         logger.info("Created new schematic tab")
 
     @Slot()
@@ -235,6 +652,10 @@ class MainWindow(QMainWindow):
         context = SchematicContext()
         context.current_name = "untitled.sym"
         self._add_schematic_tab(context, "Untitled.sym")
+        self._has_wave_results = False
+        self._clear_active_tool()
+        self._status_setup.update_mode(self._netlist_mode_name())
+        self._refresh_simulation_action_states()
         logger.info("Created new symbol tab")
 
     def _add_schematic_tab(self, context: SchematicContext, title: str) -> int:
@@ -256,8 +677,15 @@ class MainWindow(QMainWindow):
         self._tab_widget.setCurrentIndex(idx)
 
         self._context = context
+        self._has_wave_results = False
+        self._simulation_running = False
+        self._clear_active_tool()
         self.schematic_changed.emit(context)
         self._update_window_title()
+        self._status_setup.update_file(context.filename, context.modified)
+        self._status_setup.update_layer(context.rectcolor)
+        self._sync_status_indicators()
+        self._refresh_simulation_action_states()
         logger.info("Added tab index=%d title='%s' file='%s'", idx, title, context.current_name or "untitled")
 
         return idx
@@ -472,24 +900,31 @@ class MainWindow(QMainWindow):
     def toggle_grid(self) -> None:
         """Toggle grid visibility."""
         self._show_grid = not self._show_grid
-        if self.canvas:
-            self.canvas.show_grid = self._show_grid
-        logger.info("Grid visibility toggled -> %s", self._show_grid)
-
-    @Slot()
-    def toggle_color_scheme(self) -> None:
-        """Toggle between dark and light color schemes."""
-        self._dark_scheme = not self._dark_scheme
-        self._layer_manager.dark_scheme = self._dark_scheme
-
-        # Update all canvases
         for i in range(self._tab_widget.count()):
             canvas = self._tab_widget.widget(i)
             if isinstance(canvas, SchematicCanvas):
-                canvas.set_dark_scheme(self._dark_scheme)
-                if hasattr(canvas, '_renderer'):
-                    canvas._renderer.render()
-        logger.info("Color scheme toggled -> %s", "dark" if self._dark_scheme else "light")
+                canvas.show_grid = self._show_grid
+        self._sync_status_indicators()
+        logger.info("Grid visibility toggled -> %s", self._show_grid)
+
+    @Slot()
+    def toggle_snap_to_grid(self) -> None:
+        """Toggle snap-to-grid behavior."""
+        self._snap_to_grid = not self._snap_to_grid
+        for i in range(self._tab_widget.count()):
+            canvas = self._tab_widget.widget(i)
+            if isinstance(canvas, SchematicCanvas):
+                canvas.snap_to_grid = self._snap_to_grid
+        self._sync_status_indicators()
+        logger.info("Snap-to-grid toggled -> %s", self._snap_to_grid)
+
+    @Slot()
+    def toggle_color_scheme(self) -> None:
+        """Toggle between dark and light UI themes."""
+        if self._ui_theme == "dark":
+            self.set_theme_light()
+        else:
+            self.set_theme_dark()
 
     @Slot()
     def redraw(self) -> None:
@@ -561,6 +996,7 @@ class MainWindow(QMainWindow):
         """Duplicate selected objects."""
         if self._context:
             self._context.ui_state = UIState.STARTCOPY
+            self._set_active_tool("Copy")
             logger.info("UI state set to STARTCOPY")
 
     @Slot()
@@ -568,6 +1004,7 @@ class MainWindow(QMainWindow):
         """Start moving selected objects."""
         if self._context:
             self._context.ui_state = UIState.STARTMOVE
+            self._set_active_tool("Move")
             logger.info("UI state set to STARTMOVE")
 
     @Slot()
@@ -601,6 +1038,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTWIRE
             self.statusBar().showMessage("Click to start wire, click to add points, double-click to finish")
+            self._set_active_tool("Wire", "wire")
             logger.info("UI state set to STARTWIRE")
 
     @Slot()
@@ -609,6 +1047,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTLINE
             self.statusBar().showMessage("Click to start line, click to end")
+            self._set_active_tool("Line")
             logger.info("UI state set to STARTLINE")
 
     @Slot()
@@ -617,6 +1056,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTRECT
             self.statusBar().showMessage("Click to start rectangle, click to set opposite corner")
+            self._set_active_tool("Rectangle")
             logger.info("UI state set to STARTRECT")
 
     @Slot()
@@ -625,6 +1065,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTARC
             self.statusBar().showMessage("Click to set center, drag to set radius")
+            self._set_active_tool("Arc")
             logger.info("UI state set to STARTARC")
 
     @Slot()
@@ -633,6 +1074,7 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.STARTPOLYGON
             self.statusBar().showMessage("Click to add points, double-click to finish")
+            self._set_active_tool("Polygon")
             logger.info("UI state set to STARTPOLYGON")
 
     @Slot()
@@ -641,11 +1083,17 @@ class MainWindow(QMainWindow):
         if self._context:
             self._context.ui_state = UIState.PLACE_TEXT
             self.statusBar().showMessage("Click to place text")
+            self._set_active_tool("Text", "text")
             logger.info("UI state set to PLACE_TEXT")
 
     @Slot()
     def place_symbol(self) -> None:
         """Open symbol chooser to place a component."""
+        if not self._context:
+            logger.warning("Place symbol requested without active schematic context")
+            self._clear_active_tool()
+            return
+
         from pyxschem.ui.dialogs import SymbolChooserDialog
 
         dialog = SymbolChooserDialog(self)
@@ -655,7 +1103,39 @@ class MainWindow(QMainWindow):
                 self._context.ui_state = UIState.PLACE_SYMBOL
                 # TODO: Load symbol and start placement
                 self.statusBar().showMessage(f"Click to place {symbol_path}")
+                self._set_active_tool("Component", "component")
                 logger.info("Symbol selected for placement: %s", symbol_path)
+                return
+
+        # If chooser is canceled, clear sticky highlight for component tool.
+        self._clear_active_tool()
+
+    @Slot()
+    def place_ground(self) -> None:
+        """Place a ground symbol (placeholder until symbol backend binds tool)."""
+        self._set_active_tool("Ground")
+        self.statusBar().showMessage("Ground placement shortcut selected (implementation pending)", 2400)
+        logger.warning("Place ground requested but implementation is pending")
+
+    @Slot()
+    def place_net_label(self) -> None:
+        """Place a net label (placeholder until dedicated label tool is implemented)."""
+        self._set_active_tool("Net Label")
+        self.statusBar().showMessage("Net label placement selected (implementation pending)", 2400)
+        logger.warning("Place net label requested but implementation is pending")
+
+    @Slot()
+    def start_probe_mode(self) -> None:
+        """Activate probe mode when simulation results are available."""
+        if not self._has_wave_results:
+            self._clear_active_tool()
+            self.statusBar().showMessage("Probe unavailable: run simulation first", 2400)
+            logger.warning("Probe requested without loaded simulation results")
+            return
+
+        self._set_active_tool("Probe", "probe")
+        self.statusBar().showMessage("Probe mode selected (backend probe integration pending)", 2400)
+        logger.info("Probe mode selected")
 
     # -------------------------------------------------------------------------
     # Properties
@@ -687,6 +1167,7 @@ class MainWindow(QMainWindow):
             self._context.schprop = dialog.text
             self._context.modified = True
             self._update_tab_title()
+            self._refresh_simulation_action_states()
             logger.info("Updated schematic properties for '%s'", self._context.current_name or "untitled")
 
     # -------------------------------------------------------------------------
@@ -734,6 +1215,7 @@ class MainWindow(QMainWindow):
         """Set netlist type to SPICE."""
         self._netlist_type = NetlistType.SPICE
         self.statusBar().showMessage("Netlist type: SPICE", 2000)
+        self._status_setup.update_mode(self._netlist_mode_name())
         logger.info("Netlist type set to SPICE")
 
     @Slot()
@@ -741,6 +1223,7 @@ class MainWindow(QMainWindow):
         """Set netlist type to Verilog."""
         self._netlist_type = NetlistType.VERILOG
         self.statusBar().showMessage("Netlist type: Verilog", 2000)
+        self._status_setup.update_mode(self._netlist_mode_name())
         logger.info("Netlist type set to VERILOG")
 
     @Slot()
@@ -748,6 +1231,7 @@ class MainWindow(QMainWindow):
         """Set netlist type to VHDL."""
         self._netlist_type = NetlistType.VHDL
         self.statusBar().showMessage("Netlist type: VHDL", 2000)
+        self._status_setup.update_mode(self._netlist_mode_name())
         logger.info("Netlist type set to VHDL")
 
     # -------------------------------------------------------------------------
@@ -789,8 +1273,14 @@ class MainWindow(QMainWindow):
         canvas = self._tab_widget.widget(index)
         if isinstance(canvas, SchematicCanvas) and hasattr(canvas, '_renderer'):
             self._context = canvas._renderer.context
+            self._clear_active_tool()
             self.schematic_changed.emit(self._context)
             self._update_window_title()
+            if self._context:
+                self._status_setup.update_file(self._context.filename, self._context.modified)
+                self._status_setup.update_layer(self._context.rectcolor)
+            self._sync_status_indicators()
+            self._refresh_simulation_action_states()
             logger.info("Active tab changed to index %d", index)
 
     def _update_tab_title(self) -> None:
@@ -803,6 +1293,7 @@ class MainWindow(QMainWindow):
         if self._context.modified:
             title += " *"
         self._tab_widget.setTabText(idx, title)
+        self._status_setup.update_file(self._context.filename, self._context.modified)
 
     def _update_window_title(self) -> None:
         """Update the window title."""
@@ -870,14 +1361,15 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event) -> None:
         """Handle key press events."""
         key = event.key()
-        modifiers = event.modifiers()
 
         # Escape key cancels current operation
         if key == Qt.Key_Escape:
             if self._context:
                 self._context.ui_state = UIState.NONE
             self.deselect_all()
+            self._clear_active_tool()
             self.statusBar().clearMessage()
+            self._status_setup.update_mode(self._netlist_mode_name())
             event.accept()
             logger.debug("Escape pressed: cleared UI state and selection")
             return

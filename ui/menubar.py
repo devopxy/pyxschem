@@ -15,9 +15,10 @@ Provides all xschem-compatible menus:
 - Help: Documentation, About
 """
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Optional, Callable
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence, QActionGroup
-from PySide6.QtWidgets import QMenu, QMenuBar
+from PySide6.QtWidgets import QMenu, QMenuBar, QStyle
 
 if TYPE_CHECKING:
     from pyxschem.ui.main_window import MainWindow
@@ -35,6 +36,40 @@ class MenuBarSetup:
         self._window = main_window
         self._menubar = main_window.menuBar()
         self._recent_files_menu: Optional[QMenu] = None
+        self._style = main_window.style()
+        self._grid_action: Optional[QAction] = None
+        self._snap_action: Optional[QAction] = None
+        self._simulate_action: Optional[QAction] = None
+        self._probe_action: Optional[QAction] = None
+        self._waves_action: Optional[QAction] = None
+        self._stop_action: Optional[QAction] = None
+        self._theme_dark_action: Optional[QAction] = None
+        self._theme_light_action: Optional[QAction] = None
+
+    def _add_action(
+        self,
+        menu: QMenu,
+        text: str,
+        callback: Callable,
+        shortcut: str | QKeySequence | None = None,
+        icon: Optional[QStyle.StandardPixmap] = None,
+        checkable: bool = False,
+        checked: bool = False,
+    ) -> QAction:
+        """Create an action with optional icon/shortcut and connect callback."""
+        if icon is None:
+            action = menu.addAction(text)
+        else:
+            action = QAction(self._style.standardIcon(icon), text, self._window)
+            menu.addAction(action)
+
+        if shortcut is not None:
+            action.setShortcut(shortcut)
+        if checkable:
+            action.setCheckable(True)
+            action.setChecked(checked)
+        action.triggered.connect(callback)
+        return action
 
     def setup_menus(self) -> None:
         """Create all menus."""
@@ -55,31 +90,49 @@ class MenuBarSetup:
         menu = self._menubar.addMenu("&File")
 
         # New
-        action = menu.addAction("Clear &Schematic")
-        action.setShortcut(QKeySequence.New)
-        action.triggered.connect(self._window.new_schematic)
-
-        action = menu.addAction("Clear S&ymbol")
-        action.setShortcut("Ctrl+Shift+N")
-        action.triggered.connect(self._window.new_symbol)
+        self._add_action(
+            menu,
+            "Clear &Schematic",
+            self._window.new_schematic,
+            QKeySequence.New,
+            QStyle.SP_FileIcon,
+        )
+        self._add_action(
+            menu,
+            "Clear S&ymbol",
+            self._window.new_symbol,
+            "Ctrl+Shift+N",
+            QStyle.SP_FileDialogDetailedView,
+        )
 
         menu.addSeparator()
 
         # Component browser
-        action = menu.addAction("Component &browser")
-        action.setShortcut("Ctrl+I")
-        action.triggered.connect(self._window.place_symbol)
+        self._add_action(
+            menu,
+            "Component &browser",
+            self._window.place_symbol,
+            "Ctrl+I",
+            QStyle.SP_FileDialogContentsView,
+        )
 
         menu.addSeparator()
 
         # Open
-        action = menu.addAction("&Open...")
-        action.setShortcut(QKeySequence.Open)
-        action.triggered.connect(self._window.open_file)
-
-        action = menu.addAction("Open in &new window...")
-        action.setShortcut("Alt+O")
-        action.triggered.connect(self._window.open_file_new_window)
+        self._add_action(
+            menu,
+            "&Open...",
+            self._window.open_file,
+            QKeySequence.Open,
+            QStyle.SP_DialogOpenButton,
+        )
+        self._add_action(
+            menu,
+            "Open in &new window...",
+            self._window.open_file_new_window,
+            "Alt+O",
+            QStyle.SP_TitleBarNormalButton,
+        )
 
         # Recent files submenu
         self._recent_files_menu = menu.addMenu("Open &recent")
@@ -88,24 +141,38 @@ class MenuBarSetup:
         menu.addSeparator()
 
         # New tab
-        action = menu.addAction("Create new &tab")
-        action.setShortcut("Ctrl+T")
-        action.triggered.connect(self._window.new_schematic)
+        self._add_action(
+            menu,
+            "Create new &tab",
+            self._window.new_schematic,
+            "Ctrl+T",
+            QStyle.SP_FileDialogNewFolder,
+        )
 
         menu.addSeparator()
 
         # Save
-        action = menu.addAction("&Save")
-        action.setShortcut(QKeySequence.Save)
-        action.triggered.connect(self._window.save_file)
-
-        action = menu.addAction("Save &as...")
-        action.setShortcut("Ctrl+Shift+S")
-        action.triggered.connect(self._window.save_file_as)
-
-        action = menu.addAction("&Reload")
-        action.setShortcut("Alt+S")
-        action.triggered.connect(self._window.reload_file)
+        self._add_action(
+            menu,
+            "&Save",
+            self._window.save_file,
+            QKeySequence.Save,
+            QStyle.SP_DialogSaveButton,
+        )
+        self._add_action(
+            menu,
+            "Save &as...",
+            self._window.save_file_as,
+            "Ctrl+Shift+S",
+            QStyle.SP_DriveHDIcon,
+        )
+        self._add_action(
+            menu,
+            "&Reload",
+            self._window.reload_file,
+            "Alt+S",
+            QStyle.SP_BrowserReload,
+        )
 
         menu.addSeparator()
 
@@ -127,14 +194,20 @@ class MenuBarSetup:
         menu.addSeparator()
 
         # Close/Quit
-        action = menu.addAction("&Close schematic")
-        action.setShortcut("Ctrl+W")
-        action.triggered.connect(lambda: self._window._on_tab_close_requested(
-            self._window._tab_widget.currentIndex()))
-
-        action = menu.addAction("&Quit")
-        action.setShortcut(QKeySequence.Quit)
-        action.triggered.connect(self._window.close)
+        self._add_action(
+            menu,
+            "&Close schematic",
+            lambda: self._window._on_tab_close_requested(self._window._tab_widget.currentIndex()),
+            "Ctrl+W",
+            QStyle.SP_DialogCloseButton,
+        )
+        self._add_action(
+            menu,
+            "&Quit",
+            self._window.close,
+            QKeySequence.Quit,
+            QStyle.SP_TitleBarCloseButton,
+        )
 
     def _create_edit_menu(self) -> None:
         """Create the Edit menu."""
@@ -242,34 +315,125 @@ class MenuBarSetup:
 
         menu.addSeparator()
 
-        action = menu.addAction("Toggle &colorscheme")
-        action.setShortcut("Shift+O")
-        action.triggered.connect(self._window.toggle_color_scheme)
+        theme_menu = menu.addMenu("&Theme")
+        theme_group = QActionGroup(self._window)
+        theme_group.setExclusive(True)
+
+        self._theme_dark_action = theme_menu.addAction("&Dark")
+        self._theme_dark_action.setCheckable(True)
+        self._theme_dark_action.setChecked(self._window.ui_theme == "dark")
+        self._theme_dark_action.triggered.connect(self._window.set_theme_dark)
+        theme_group.addAction(self._theme_dark_action)
+
+        self._theme_light_action = theme_menu.addAction("&Light")
+        self._theme_light_action.setCheckable(True)
+        self._theme_light_action.setChecked(self._window.ui_theme == "light")
+        self._theme_light_action.triggered.connect(self._window.set_theme_light)
+        theme_group.addAction(self._theme_light_action)
 
         menu.addSeparator()
 
         # Show/Hide submenu
         show_menu = menu.addMenu("Show / &Hide")
 
-        self._grid_action = show_menu.addAction("Draw &grid")
-        self._grid_action.setCheckable(True)
-        self._grid_action.setChecked(True)
-        self._grid_action.setShortcut("%")
-        self._grid_action.triggered.connect(self._window.toggle_grid)
+        self._grid_action = self._add_action(
+            show_menu,
+            "Draw &grid",
+            self._window.toggle_grid,
+            "%",
+            QStyle.SP_DialogResetButton,
+            checkable=True,
+            checked=True,
+        )
 
-        self._toolbar_action = show_menu.addAction("Show &Toolbar")
-        self._toolbar_action.setCheckable(True)
-        self._toolbar_action.setChecked(True)
-        self._toolbar_action.triggered.connect(self._toggle_toolbar)
+        panels_menu = show_menu.addMenu("&Panels")
+
+        # Individual toolbar and sidebar visibility actions.
+        quick_action = self._window._toolbar_setup.toolbar.toggleViewAction()
+        quick_action.setText("Core Toolbar")
+        quick_action.setIcon(self._style.standardIcon(QStyle.SP_ToolBarHorizontalExtensionButton))
+        panels_menu.addAction(quick_action)
+
+        draw_action = self._window._toolbar_setup.draw_toolbar.toggleViewAction()
+        draw_action.setText("Placement Toolbar")
+        draw_action.setIcon(self._style.standardIcon(QStyle.SP_FileDialogListView))
+        panels_menu.addAction(draw_action)
+
+        sim_action = self._window._toolbar_setup.sim_toolbar.toggleViewAction()
+        sim_action.setText("Analysis Toolbar")
+        sim_action.setIcon(self._style.standardIcon(QStyle.SP_MediaPlay))
+        panels_menu.addAction(sim_action)
+
+        if self._window.workflow_dock is not None:
+            workflow_action = self._window.workflow_dock.toggleViewAction()
+            workflow_action.setText("Workflow Sidebar")
+            workflow_action.setIcon(self._style.standardIcon(QStyle.SP_FileDialogDetailedView))
+            panels_menu.addAction(workflow_action)
+
+        panels_menu.addSeparator()
+        self._add_action(
+            panels_menu,
+            "Show All Panels",
+            self._show_all_panels,
+            icon=QStyle.SP_DialogYesButton,
+        )
+        self._add_action(
+            panels_menu,
+            "Hide All Panels",
+            self._hide_all_panels,
+            icon=QStyle.SP_DialogNoButton,
+        )
+
+        # Toolbar configuration menu.
+        toolbar_config_menu = menu.addMenu("Toolbar &Config")
+
+        style_menu = toolbar_config_menu.addMenu("Button &Style")
+        style_group = QActionGroup(self._window)
+        style_group.setExclusive(True)
+
+        current_style = self._window._toolbar_setup.current_tool_button_style()
+        style_options = [
+            ("Text Under Icons", Qt.ToolButtonTextUnderIcon),
+            ("Text Beside Icons", Qt.ToolButtonTextBesideIcon),
+            ("Icons Only", Qt.ToolButtonIconOnly),
+            ("Text Only", Qt.ToolButtonTextOnly),
+        ]
+        for label, style in style_options:
+            action = style_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(current_style == style)
+            action.triggered.connect(lambda checked, s=style: self._apply_toolbar_style(s))
+            style_group.addAction(action)
+
+        icon_menu = toolbar_config_menu.addMenu("&Icon Size")
+        icon_group = QActionGroup(self._window)
+        icon_group.setExclusive(True)
+
+        current_icon_size = self._window._toolbar_setup.current_icon_size()
+        for size in (16, 20, 24, 28, 32):
+            action = icon_menu.addAction(f"{size}px")
+            action.setCheckable(True)
+            action.setChecked(current_icon_size == size)
+            action.triggered.connect(lambda checked, px=size: self._apply_toolbar_icon_size(px))
+            icon_group.addAction(action)
+
+        self._add_action(
+            toolbar_config_menu,
+            "Reset Toolbar Defaults",
+            self._reset_toolbar_config,
+            icon=QStyle.SP_DialogResetButton,
+        )
 
     def _create_options_menu(self) -> None:
         """Create the Options menu."""
         menu = self._menubar.addMenu("&Options")
 
         # Snap settings
-        self._snap_action = menu.addAction("Enable &stretch")
+        self._snap_action = menu.addAction("Enable &snap to grid")
         self._snap_action.setCheckable(True)
+        self._snap_action.setChecked(self._window.snap_to_grid_enabled)
         self._snap_action.setShortcut("Y")
+        self._snap_action.triggered.connect(self._window.toggle_snap_to_grid)
 
         action = menu.addAction("Half Snap Threshold")
         action.setShortcut("G")
@@ -371,15 +535,41 @@ class MenuBarSetup:
         action = menu.addAction("&Set netlist dir")
         # action.triggered.connect(...)
 
-        action = menu.addAction("&Netlist")
-        action.setShortcut("N")
-        action.triggered.connect(self._window.generate_netlist)
+        self._add_action(
+            menu,
+            "&Netlist",
+            self._window.generate_netlist,
+            "N",
+            QStyle.SP_ArrowRight,
+        )
 
-        action = menu.addAction("&Simulate")
-        # action.triggered.connect(...)
+        self._simulate_action = self._add_action(
+            menu,
+            "&Run",
+            self._window.run_simulation,
+            icon=QStyle.SP_MediaPlay,
+        )
 
-        action = menu.addAction("&Waves")
-        # action.triggered.connect(...)
+        self._stop_action = self._add_action(
+            menu,
+            "S&top",
+            self._window.stop_simulation,
+            icon=QStyle.SP_MediaStop,
+        )
+
+        self._probe_action = self._add_action(
+            menu,
+            "&Probe",
+            self._window.start_probe_mode,
+            icon=QStyle.SP_DialogHelpButton,
+        )
+
+        self._waves_action = self._add_action(
+            menu,
+            "&Waves",
+            self._window.open_waves,
+            icon=QStyle.SP_MediaPlay,
+        )
 
     def _create_help_menu(self) -> None:
         """Create the Help menu."""
@@ -418,17 +608,71 @@ class MenuBarSetup:
             action = self._recent_files_menu.addAction("(No recent files)")
             action.setEnabled(False)
 
-    def _toggle_toolbar(self) -> None:
-        """Toggle toolbar visibility."""
-        toolbar = self._window._toolbar_setup.toolbar
-        if toolbar:
-            toolbar.setVisible(not toolbar.isVisible())
-            self._toolbar_action.setChecked(toolbar.isVisible())
+    def _show_all_panels(self) -> None:
+        """Show all configurable toolbars and side workflow panel."""
+        self._window._toolbar_setup.set_visibility(True, True, True)
+        if self._window.workflow_dock is not None:
+            self._window.workflow_dock.show()
+
+    def _hide_all_panels(self) -> None:
+        """Hide all configurable toolbars and side workflow panel."""
+        self._window._toolbar_setup.set_visibility(False, False, False)
+        if self._window.workflow_dock is not None:
+            self._window.workflow_dock.hide()
+
+    def _apply_toolbar_style(self, style: Qt.ToolButtonStyle) -> None:
+        """Apply selected toolbar button style."""
+        self._window._toolbar_setup.set_tool_button_style(style)
+
+    def _apply_toolbar_icon_size(self, size: int) -> None:
+        """Apply selected toolbar icon size."""
+        self._window._toolbar_setup.set_icon_size(size)
+
+    def _reset_toolbar_config(self) -> None:
+        """Reset toolbar configuration to default style and visibility."""
+        self._window._toolbar_setup.set_tool_button_style(Qt.ToolButtonTextUnderIcon)
+        self._window._toolbar_setup.set_icon_size(20)
+        self._show_all_panels()
+
+    def update_grid_action(self, checked: bool) -> None:
+        """Keep the View menu grid check state synced to application state."""
+        if self._grid_action is not None:
+            self._grid_action.setChecked(checked)
+
+    def update_snap_action(self, checked: bool) -> None:
+        """Keep the Options menu snap check state synced to application state."""
+        if self._snap_action is not None:
+            self._snap_action.setChecked(checked)
+
+    def update_theme_actions(self, theme_name: str) -> None:
+        """Keep the View->Theme menu check state synced to current theme."""
+        if self._theme_dark_action is not None:
+            self._theme_dark_action.setChecked(theme_name == "dark")
+        if self._theme_light_action is not None:
+            self._theme_light_action.setChecked(theme_name == "light")
+
+    def set_simulation_actions_state(
+        self,
+        *,
+        run_enabled: bool,
+        probe_enabled: bool,
+        stop_enabled: bool,
+    ) -> None:
+        """Enable or disable simulation actions based on app context."""
+        if self._simulate_action is not None:
+            self._simulate_action.setEnabled(run_enabled)
+        if self._probe_action is not None:
+            self._probe_action.setEnabled(probe_enabled)
+        if self._stop_action is not None:
+            self._stop_action.setEnabled(stop_enabled)
+        if self._waves_action is not None:
+            self._waves_action.setEnabled(probe_enabled)
 
     def _set_layer(self, layer: int) -> None:
         """Set the current drawing layer."""
         if self._window._context:
             self._window._context.rectcolor = layer
+            self._window._status_setup.update_layer(layer)
             self._window.statusBar().showMessage(f"Layer: {layer}", 2000)
 
     def _show_help(self) -> None:
