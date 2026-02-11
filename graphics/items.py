@@ -94,6 +94,11 @@ class BaseSchematicItem(QGraphicsItem):
         self._highlight_color = color
         self.update()
 
+    @property
+    def context_object(self):
+        """Return the underlying context primitive. Subclasses must override."""
+        return None
+
     def itemChange(self, change, value):
         """Handle selection changes."""
         if change == QGraphicsItem.ItemSelectedChange:
@@ -124,6 +129,10 @@ class WireItem(BaseSchematicItem):
     @property
     def wire(self) -> "Wire":
         """Get the wire data."""
+        return self._wire
+
+    @property
+    def context_object(self):
         return self._wire
 
     def set_junction(self, end1: bool, end2: bool) -> None:
@@ -197,6 +206,10 @@ class LineItem(BaseSchematicItem):
         """Get the line data."""
         return self._line
 
+    @property
+    def context_object(self):
+        return self._line
+
     def boundingRect(self) -> QRectF:
         """Return bounding rectangle."""
         x1, y1, x2, y2 = self._line.bbox
@@ -241,6 +254,10 @@ class RectItem(BaseSchematicItem):
     @property
     def rect(self) -> "Rect":
         """Get the rect data."""
+        return self._rect
+
+    @property
+    def context_object(self):
         return self._rect
 
     def boundingRect(self) -> QRectF:
@@ -297,6 +314,10 @@ class ArcItem(BaseSchematicItem):
     @property
     def arc(self) -> "Arc":
         """Get the arc data."""
+        return self._arc
+
+    @property
+    def context_object(self):
         return self._arc
 
     def boundingRect(self) -> QRectF:
@@ -377,6 +398,10 @@ class PolygonItem(BaseSchematicItem):
         """Get the polygon data."""
         return self._polygon
 
+    @property
+    def context_object(self):
+        return self._polygon
+
     def boundingRect(self) -> QRectF:
         """Return bounding rectangle."""
         x1, y1, x2, y2 = self._polygon.bbox
@@ -443,6 +468,10 @@ class TextItem(BaseSchematicItem):
     @property
     def text(self) -> "Text":
         """Get the text data."""
+        return self._text
+
+    @property
+    def context_object(self):
         return self._text
 
     def _calculate_text_rect(self) -> QRectF:
@@ -580,6 +609,11 @@ class InstanceItem(QGraphicsItemGroup):
         # Build child items
         self._build_symbol_items()
 
+        # Disable selectability on children so clicks select the group (Instance),
+        # not individual symbol sub-elements (Line, Rect, etc.)
+        for child in self.childItems():
+            child.setFlag(QGraphicsItem.ItemIsSelectable, False)
+
         # Apply instance transformation
         self._apply_transform()
 
@@ -635,6 +669,10 @@ class InstanceItem(QGraphicsItemGroup):
     @property
     def instance(self) -> "Instance":
         """Get the instance data."""
+        return self._instance
+
+    @property
+    def context_object(self):
         return self._instance
 
     @property

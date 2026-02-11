@@ -91,13 +91,12 @@ class MenuBarSetup:
         """Create the File menu."""
         menu = self._menubar.addMenu("&File")
 
-        # New
+        # New (shortcut Ctrl+N is on toolbar)
         self._add_action(
             menu,
             "Clear &Schematic",
             self._window.new_schematic,
-            QKeySequence.New,
-            QStyle.SP_FileIcon,
+            icon=QStyle.SP_FileIcon,
         )
         self._add_action(
             menu,
@@ -109,24 +108,22 @@ class MenuBarSetup:
 
         menu.addSeparator()
 
-        # Component browser
+        # Component browser (shortcut Ctrl+I is on toolbar)
         self._add_action(
             menu,
             "Component &browser",
             self._window.place_symbol,
-            "Ctrl+I",
-            QStyle.SP_FileDialogContentsView,
+            icon=QStyle.SP_FileDialogContentsView,
         )
 
         menu.addSeparator()
 
-        # Open
+        # Open (shortcut Ctrl+O is on toolbar)
         self._add_action(
             menu,
             "&Open...",
             self._window.open_file,
-            QKeySequence.Open,
-            QStyle.SP_DialogOpenButton,
+            icon=QStyle.SP_DialogOpenButton,
         )
         self._add_action(
             menu,
@@ -153,13 +150,12 @@ class MenuBarSetup:
 
         menu.addSeparator()
 
-        # Save
+        # Save (shortcut Ctrl+S is on toolbar)
         self._add_action(
             menu,
             "&Save",
             self._window.save_file,
-            QKeySequence.Save,
-            QStyle.SP_DialogSaveButton,
+            icon=QStyle.SP_DialogSaveButton,
         )
         self._add_action(
             menu,
@@ -226,19 +222,19 @@ class MenuBarSetup:
         menu.addSeparator()
 
         action = menu.addAction("&Copy")
-        action.setShortcut(QKeySequence.Copy)
+        # Shortcut Ctrl+C is on toolbar
         action.triggered.connect(self._window.copy)
 
         action = menu.addAction("Cu&t")
-        action.setShortcut(QKeySequence.Cut)
+        # Shortcut Ctrl+X is on toolbar
         action.triggered.connect(self._window.cut)
 
         action = menu.addAction("&Paste")
-        action.setShortcut(QKeySequence.Paste)
+        # Shortcut Ctrl+V is on toolbar
         action.triggered.connect(self._window.paste)
 
         action = menu.addAction("&Delete")
-        action.setShortcut(QKeySequence.Delete)
+        # Shortcut Delete is on toolbar
         action.triggered.connect(self._window.delete_selected)
 
         menu.addSeparator()
@@ -248,7 +244,7 @@ class MenuBarSetup:
         action.triggered.connect(self._window.select_all)
 
         action = menu.addAction("D&eselect all")
-        action.setShortcut("Escape")
+        # Escape is handled by canvas/MainWindow keyPressEvent (cancel drawing + deselect)
         action.triggered.connect(self._window.deselect_all)
 
         menu.addSeparator()
@@ -258,13 +254,13 @@ class MenuBarSetup:
         action.triggered.connect(self._window.duplicate)
 
         action = menu.addAction("&Move objects")
-        action.setShortcut("M")
+        # Shortcut M is on toolbar
         action.triggered.connect(self._window.move_selected)
 
         menu.addSeparator()
 
         action = menu.addAction("&Rotate selected")
-        action.setShortcut("Shift+R")
+        # Shortcut Shift+R is on toolbar
         action.triggered.connect(self._window.rotate_selected)
 
         action = menu.addAction("&Horizontal flip")
@@ -294,13 +290,13 @@ class MenuBarSetup:
         menu = self._menubar.addMenu("&View")
 
         action = menu.addAction("&Redraw")
-        action.setShortcut("Escape")
+        # Escape is handled by canvas/MainWindow keyPressEvent (cancel drawing + deselect + redraw)
         action.triggered.connect(self._window.redraw)
 
         menu.addSeparator()
 
         action = menu.addAction("Zoom &Full")
-        action.setShortcut("F")
+        # Shortcut F is on toolbar
         action.triggered.connect(self._window.zoom_fit)
 
         action = menu.addAction("Zoom &In")
@@ -308,7 +304,7 @@ class MenuBarSetup:
         action.triggered.connect(self._window.zoom_in)
 
         action = menu.addAction("Zoom &Out")
-        action.setShortcut("Ctrl+Z")
+        # Was Ctrl+Z which conflicts with Undo (toolbar). Use canvas +/- instead.
         action.triggered.connect(self._window.zoom_out)
 
         action = menu.addAction("Zoom &box")
@@ -342,8 +338,8 @@ class MenuBarSetup:
             show_menu,
             "Draw &grid",
             self._window.toggle_grid,
-            "%",
-            QStyle.SP_DialogResetButton,
+            # Shortcut % is on toolbar
+            icon=QStyle.SP_DialogResetButton,
             checkable=True,
             checked=True,
         )
@@ -440,11 +436,11 @@ class MenuBarSetup:
         self._snap_action = menu.addAction("Enable &snap to grid")
         self._snap_action.setCheckable(True)
         self._snap_action.setChecked(self._window.snap_to_grid_enabled)
-        self._snap_action.setShortcut("Y")
+        # Shortcut Y is on toolbar
         self._snap_action.triggered.connect(self._window.toggle_snap_to_grid)
 
         action = menu.addAction("Half Snap Threshold")
-        action.setShortcut("G")
+        # G conflicts with toolbar ground placement
 
         action = menu.addAction("Double Snap Threshold")
         action.setShortcut("Shift+G")
@@ -517,7 +513,7 @@ class MenuBarSetup:
         menu = self._menubar.addMenu("&Symbol")
 
         action = menu.addAction("Make symbol from &schematic")
-        action.setShortcut("A")
+        # A conflicts with toolbar net_label placement
         # action.triggered.connect(...)
 
         action = menu.addAction("&Attach labels to component")
@@ -547,8 +543,8 @@ class MenuBarSetup:
             menu,
             "&Netlist",
             self._window.generate_netlist,
-            "N",
-            QStyle.SP_ArrowRight,
+            # Shortcut N is on toolbar
+            icon=QStyle.SP_ArrowRight,
         )
 
         self._simulate_action = self._add_action(

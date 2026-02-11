@@ -147,6 +147,23 @@ class DrawingController:
         self._state = DrawingState(mode=DrawingMode.ZOOM_BOX)
         logger.info("Drawing mode -> ZOOM_BOX")
 
+    def start_move(self) -> None:
+        """Start interactive move mode.
+
+        Two-click workflow: first click sets reference point,
+        second click sets destination. The delta is applied to
+        all selected objects.
+        """
+        self._clear_preview()
+        self._state = DrawingState(mode=DrawingMode.MOVE)
+        logger.info("Drawing mode -> MOVE")
+
+    def start_copy_mode(self) -> None:
+        """Start interactive copy mode (duplicate + move)."""
+        self._clear_preview()
+        self._state = DrawingState(mode=DrawingMode.COPY)
+        logger.info("Drawing mode -> COPY")
+
     def cancel(self) -> None:
         """Cancel the current drawing operation."""
         self._clear_preview()
@@ -191,6 +208,10 @@ class DrawingController:
             return self._handle_symbol_click(point)
         elif self._state.mode == DrawingMode.ZOOM_BOX:
             return self._handle_zoom_box_click(point)
+        elif self._state.mode == DrawingMode.MOVE:
+            return self._handle_move_click(point)
+        elif self._state.mode == DrawingMode.COPY:
+            return self._handle_copy_click(point)
 
         return False
 
@@ -476,6 +497,12 @@ class DrawingController:
 
         # Look up symbol index in context
         sym_idx = self._context.symbol_map.get(symbol.name, -1)
+        if sym_idx == -1:
+            # Fallback: symbol was added but map key might differ (path normalization)
+            for i, sym in enumerate(self._context.symbols):
+                if sym is symbol:
+                    sym_idx = i
+                    break
 
         instance = Instance(
             name=self._state.symbol_path,
@@ -559,6 +586,123 @@ class DrawingController:
         return True
 
     # -------------------------------------------------------------------------
+    # Move / Copy
+    # -------------------------------------------------------------------------
+
+    def _handle_move_click(self, point: QPointF) -> bool:
+        """Handle click during interactive move.
+
+        First click sets reference point, second click finalizes the move.
+        """
+        if self._state.start_point is None:
+            self._state.start_point = point
+            logger.debug("Move reference point set at (%.1f, %.1f)", point.x(), point.y())
+        else:
+            dx = point.x() - self._state.start_point.x()
+            dy = point.y() - self._state.start_point.y()
+
+            ec = getattr(self._canvas, '_edit_controller', None)
+            undo_stack = getattr(self._canvas, '_undo_stack', None)
+
+            if undo_stack and ec:
+                try:
+                    from pyxschem.commands.edit_commands import MoveCommand
+                    cmd = MoveCommand(self._context, self._renderer, dx, dy)
+                    undo_stack.push(cmd)
+                except Exception:
+                    if ec:
+                        ec.move(dx, dy)
+            elif ec:
+                ec.move(dx, dy)
+
+            self._clear_preview()
+            self._state = DrawingState()
+            logger.info("Move completed: dx=%.1f, dy=%.1f", dx, dy)
+        return True
+
+    def _handle_copy_click(self, point: QPointF) -> bool:
+        """Handle click during interactive copy.
+
+        First click sets reference point, second click duplicates + moves.
+        """
+        if self._state.start_point is None:
+            self._state.start_point = point
+            logger.debug("Copy reference point set at (%.1f, %.1f)", point.x(), point.y())
+        else:
+            dx = point.x() - self._state.start_point.x()
+            dy = point.y() - self._state.start_point.y()
+
+            ec = getattr(self._canvas, '_edit_controller', None)
+            if ec:
+                ec.copy()
+                ec.paste(offset=(dx, dy))
+
+            self._clear_preview()
+            self._state = DrawingState()
+            logger.info("Copy completed: dx=%.1f, dy=%.1f", dx, dy)
+        return True
+
+    def _draw_move_preview(self, dx: float, dy: float) -> None:
+        """Draw ghost outlines showing where selected items will move to."""
+        from pyxschem.core.primitives import SelectionState
+
+        scene = self._canvas.get_scene()
+        pen = QPen(self.RUBBER_BAND_COLOR, self.RUBBER_BAND_WIDTH)
+        pen.setStyle(Qt.DashLine)
+
+        for wire in self._context.wires:
+            if wire.sel & SelectionState.SELECTED:
+                line = QGraphicsLineItem(
+                    wire.x1 + dx, wire.y1 + dy,
+                    wire.x2 + dx, wire.y2 + dy
+                )
+                line.setPen(pen)
+                scene.addItem(line)
+                self._state.preview_items.append(line)
+
+        for layer_lines in self._context.lines.values():
+            for ln in layer_lines:
+                if ln.sel & SelectionState.SELECTED:
+                    line = QGraphicsLineItem(
+                        ln.x1 + dx, ln.y1 + dy,
+                        ln.x2 + dx, ln.y2 + dy
+                    )
+                    line.setPen(pen)
+                    scene.addItem(line)
+                    self._state.preview_items.append(line)
+
+        for layer_rects in self._context.rects.values():
+            for r in layer_rects:
+                if r.sel & SelectionState.SELECTED:
+                    x1, y1, x2, y2 = r.bbox
+                    rect = QGraphicsRectItem(x1 + dx, y1 + dy, x2 - x1, y2 - y1)
+                    rect.setPen(pen)
+                    scene.addItem(rect)
+                    self._state.preview_items.append(rect)
+
+        for inst in self._context.instances:
+            if inst.sel & SelectionState.SELECTED:
+                x1, y1, x2, y2 = inst.bbox
+                rect = QGraphicsRectItem(x1 + dx, y1 + dy, x2 - x1, y2 - y1)
+                rect.setPen(pen)
+                scene.addItem(rect)
+                self._state.preview_items.append(rect)
+
+        for text in self._context.texts:
+            if text.sel & SelectionState.SELECTED:
+                x, y = text.x0 + dx, text.y0 + dy
+                # Small cross marker for text position
+                size = 5
+                line_h = QGraphicsLineItem(x - size, y, x + size, y)
+                line_h.setPen(pen)
+                scene.addItem(line_h)
+                self._state.preview_items.append(line_h)
+                line_v = QGraphicsLineItem(x, y - size, x, y + size)
+                line_v.setPen(pen)
+                scene.addItem(line_v)
+                self._state.preview_items.append(line_v)
+
+    # -------------------------------------------------------------------------
     # Preview (rubber-band) handling
     # -------------------------------------------------------------------------
 
@@ -616,6 +760,12 @@ class DrawingController:
                 scene.addItem(ellipse)
                 self._state.preview_items.append(ellipse)
 
+        elif self._state.mode in (DrawingMode.MOVE, DrawingMode.COPY):
+            if self._state.start_point:
+                dx = self._state.current_point.x() - self._state.start_point.x()
+                dy = self._state.current_point.y() - self._state.start_point.y()
+                self._draw_move_preview(dx, dy)
+
         elif self._state.mode == DrawingMode.POLYGON:
             if self._state.points:
                 # Draw lines between points
@@ -644,6 +794,10 @@ class DrawingController:
         """Clear all preview items."""
         scene = self._canvas.get_scene()
         for item in self._state.preview_items:
-            scene.removeItem(item)
+            try:
+                scene.removeItem(item)
+            except RuntimeError:
+                # C++ object already deleted (e.g. scene.clear() from renderer)
+                pass
         self._state.preview_items.clear()
         logger.debug("Cleared preview items")

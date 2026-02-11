@@ -108,6 +108,10 @@ class SchematicRenderer:
         self._render_polygons()
         self._render_texts()
         self._render_instances()
+
+        # Sync selection state from context to scene items
+        self._sync_selection_from_context()
+
         logger.info(
             (
                 "Render complete (wires=%d lines=%d rects=%d arcs=%d "
@@ -193,6 +197,46 @@ class SchematicRenderer:
         if instance.ptr >= 0 and instance.ptr < len(self._context.symbols):
             return self._context.symbols[instance.ptr]
         return self._context.get_symbol(instance.name)
+
+    def _sync_selection_from_context(self) -> None:
+        """Sync context sel flags to QGraphicsItem selection state.
+
+        Called after render() to reflect programmatic selection changes
+        (select_all, paste, deselect_all) visually in the scene.
+        """
+        from pyxschem.core.primitives import SelectionState
+
+        for item in self._wire_items:
+            if item.wire.sel & SelectionState.SELECTED:
+                item.setSelected(True)
+
+        for layer_items in self._line_items.values():
+            for item in layer_items:
+                if item.line.sel & SelectionState.SELECTED:
+                    item.setSelected(True)
+
+        for layer_items in self._rect_items.values():
+            for item in layer_items:
+                if item.rect.sel & SelectionState.SELECTED:
+                    item.setSelected(True)
+
+        for layer_items in self._arc_items.values():
+            for item in layer_items:
+                if item.arc.sel & SelectionState.SELECTED:
+                    item.setSelected(True)
+
+        for layer_items in self._polygon_items.values():
+            for item in layer_items:
+                if item.polygon.sel & SelectionState.SELECTED:
+                    item.setSelected(True)
+
+        for item in self._text_items:
+            if item.text.sel & SelectionState.SELECTED:
+                item.setSelected(True)
+
+        for item in self._instance_items:
+            if item.instance.sel & SelectionState.SELECTED:
+                item.setSelected(True)
 
     def fit_view(self) -> None:
         """Fit the canvas view to show all content."""

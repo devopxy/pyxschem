@@ -330,6 +330,9 @@ class SchematicCanvas(QGraphicsView):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Handle mouse press for pan, drawing, and selection."""
+        # Ensure canvas has keyboard focus so Escape and other keys work
+        self.setFocus(Qt.MouseFocusReason)
+
         if event.button() == Qt.MiddleButton:
             # Start panning
             self._panning = True
@@ -422,28 +425,47 @@ class SchematicCanvas(QGraphicsView):
             self._selecting = False
             self._rubber_band.hide()
 
-            # Get selection rectangle in scene coordinates
-            rect = self._rubber_band.geometry()
-            scene_rect = QRectF(
-                self.mapToScene(rect.topLeft()),
-                self.mapToScene(rect.bottomRight())
-            )
+            # Detect click vs drag using pixel threshold
+            release_pos = event.position()
+            dx = abs(release_pos.x() - self._selection_start.x())
+            dy = abs(release_pos.y() - self._selection_start.y())
+            CLICK_THRESHOLD = 4  # pixels
 
-            # Select items in rectangle
-            if not (event.modifiers() & Qt.ShiftModifier):
-                # Clear previous selection unless Shift is held
-                self._scene.clearSelection()
+            if dx < CLICK_THRESHOLD and dy < CLICK_THRESHOLD:
+                # Single click -- select topmost item under cursor
+                scene_pos = self.mapToScene(event.position().toPoint())
 
-            # Select items in the rectangle
-            path = self._scene.selectionArea()
-            items = self._scene.items(scene_rect, Qt.IntersectsItemShape)
-            for item in items:
-                if item.flags() & item.ItemIsSelectable:
-                    item.setSelected(True)
+                if not (event.modifiers() & Qt.ShiftModifier):
+                    self._scene.clearSelection()
 
+                items = self._scene.items(scene_pos)
+                for item in items:
+                    if item.flags() & item.ItemIsSelectable:
+                        if event.modifiers() & Qt.ShiftModifier:
+                            item.setSelected(not item.isSelected())
+                        else:
+                            item.setSelected(True)
+                        break  # Select only topmost item
+            else:
+                # Rubber-band drag -- select items in rectangle
+                rect = self._rubber_band.geometry()
+                scene_rect = QRectF(
+                    self.mapToScene(rect.topLeft()),
+                    self.mapToScene(rect.bottomRight())
+                )
+
+                if not (event.modifiers() & Qt.ShiftModifier):
+                    self._scene.clearSelection()
+
+                items = self._scene.items(scene_rect, Qt.IntersectsItemShape)
+                for item in items:
+                    if item.flags() & item.ItemIsSelectable:
+                        item.setSelected(True)
+
+            self.sync_selection_to_context()
             self.selection_changed.emit()
             event.accept()
-            logger.debug("Rubber-band selection ended (items=%d)", len(items))
+            logger.debug("Selection completed")
 
         else:
             super().mouseReleaseEvent(event)
@@ -462,39 +484,37 @@ class SchematicCanvas(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keyboard shortcuts."""
+        """Handle view-level keyboard shortcuts.
+
+        Single-letter shortcuts (W, M, R, F, G, etc.) are handled by
+        QAction shortcuts defined in toolbar/menu, so we only handle
+        zoom keys and Escape here to avoid conflicts.
+        """
         key = event.key()
 
-        if key == Qt.Key_F:
-            # Fit all
-            self.fit_in_view()
-            event.accept()
-
-        elif key == Qt.Key_Plus or key == Qt.Key_Equal:
-            # Zoom in
+        if key == Qt.Key_Plus or key == Qt.Key_Equal:
             self.zoom_in()
             event.accept()
 
         elif key == Qt.Key_Minus:
-            # Zoom out
             self.zoom_out()
             event.accept()
 
         elif key == Qt.Key_0:
-            # Reset zoom to 1:1
             self.set_zoom(1.0)
             event.accept()
 
-        elif key == Qt.Key_G:
-            # Toggle grid
-            self.show_grid = not self.show_grid
-            event.accept()
-
         elif key == Qt.Key_Escape:
-            # Clear selection
+            # Cancel any active drawing mode first
+            if (hasattr(self, '_drawing_controller') and self._drawing_controller
+                    and self._drawing_controller.is_drawing):
+                self._drawing_controller.cancel()
+            # Clear scene selection
             self._scene.clearSelection()
+            self.sync_selection_to_context()
             self.selection_changed.emit()
-            event.accept()
+            # Don't accept — let MainWindow also handle for UIState/status cleanup
+            event.ignore()
 
         else:
             super().keyPressEvent(event)
@@ -613,6 +633,45 @@ class SchematicCanvas(QGraphicsView):
     def get_visible_rect(self) -> QRectF:
         """Get the currently visible rectangle in world coordinates."""
         return self.mapToScene(self.viewport().rect()).boundingRect()
+
+    def sync_selection_to_context(self) -> None:
+        """Sync QGraphicsScene selection state to context primitive sel flags.
+
+        This bridges the Qt visual selection system with the SchematicContext
+        selection flags that edit operations (delete, move, rotate, etc.) depend on.
+        """
+        from pyxschem.core.primitives import SelectionState
+
+        if not hasattr(self, '_edit_controller') or not self._edit_controller:
+            return
+
+        context = self._edit_controller._context
+
+        # Clear all context selection flags
+        for wire in context.wires:
+            wire.sel = SelectionState.NONE
+        for text in context.texts:
+            text.sel = SelectionState.NONE
+        for layer_rects in context.rects.values():
+            for rect in layer_rects:
+                rect.sel = SelectionState.NONE
+        for layer_lines in context.lines.values():
+            for line in layer_lines:
+                line.sel = SelectionState.NONE
+        for layer_arcs in context.arcs.values():
+            for arc in layer_arcs:
+                arc.sel = SelectionState.NONE
+        for layer_polys in context.polygons.values():
+            for poly in layer_polys:
+                poly.sel = SelectionState.NONE
+        for inst in context.instances:
+            inst.sel = SelectionState.NONE
+
+        # Set SELECTED on context objects whose scene items are selected
+        for item in self._scene.selectedItems():
+            ctx_obj = getattr(item, 'context_object', None)
+            if ctx_obj is not None and hasattr(ctx_obj, 'sel'):
+                ctx_obj.sel = SelectionState.SELECTED
 
     def set_dark_scheme(self, dark: bool) -> None:
         """Switch between dark and light color schemes."""

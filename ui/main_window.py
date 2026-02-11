@@ -982,6 +982,10 @@ class MainWindow(QMainWindow):
         Returns:
             True if file was opened successfully
         """
+        # Guard against bool from QAction.triggered(bool) signal
+        if not isinstance(file_path, (Path, str, type(None))):
+            file_path = None
+
         if file_path is None:
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -991,6 +995,8 @@ class MainWindow(QMainWindow):
             )
             if not file_path:
                 return False
+            file_path = Path(file_path)
+        elif isinstance(file_path, str):
             file_path = Path(file_path)
 
         logger.info("Opening file '%s'", file_path)
@@ -1120,7 +1126,7 @@ class MainWindow(QMainWindow):
 
             # Update the current tab
             canvas = self.canvas
-            if canvas and canvas._renderer:
+            if canvas and hasattr(canvas, '_renderer') and canvas._renderer:
                 canvas._renderer.context = new_context
                 canvas._renderer.fit_view()
 
@@ -1274,9 +1280,10 @@ class MainWindow(QMainWindow):
         ec = self.edit_controller
         if ec and ec.has_selection():
             stack = self.undo_stack
-            if stack:
+            renderer = self.renderer
+            if stack and renderer:
                 from pyxschem.commands.edit_commands import DeleteCommand
-                cmd = DeleteCommand(self._context, self._renderer)
+                cmd = DeleteCommand(self._context, renderer)
                 stack.push(cmd)
             else:
                 ec.delete()
@@ -1308,11 +1315,17 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def move_selected(self) -> None:
-        """Start moving selected objects."""
-        if self._context:
-            self._context.ui_state = UIState.STARTMOVE
+        """Start interactive move of selected objects."""
+        ec = self.edit_controller
+        dc = self.drawing_controller
+        if ec and dc:
+            if not ec.has_selection():
+                self.statusBar().showMessage("Nothing selected to move", 2000)
+                return
+            dc.start_move()
+            self.statusBar().showMessage("Click reference point, then click destination")
             self._set_active_tool("Move")
-            logger.info("UI state set to STARTMOVE")
+            logger.info("Interactive move started")
 
     @Slot()
     def rotate_selected(self) -> None:
@@ -1473,7 +1486,9 @@ class MainWindow(QMainWindow):
                 if instname:
                     inst.instname = instname
                 self._context.modified = True
-                self._renderer.render()
+                renderer = self.renderer
+                if renderer:
+                    renderer.render()
                 self._update_tab_title()
                 logger.info("Updated properties for instance '%s'", inst.instname or inst.name)
             return
@@ -1488,7 +1503,9 @@ class MainWindow(QMainWindow):
                 if lab:
                     wire.node = lab
                 self._context.modified = True
-                self._renderer.render()
+                renderer = self.renderer
+                if renderer:
+                    renderer.render()
                 self._update_tab_title()
                 logger.info("Updated wire properties")
             return
@@ -1500,7 +1517,9 @@ class MainWindow(QMainWindow):
             if dialog.exec():
                 text.txt_ptr = dialog.text
                 self._context.modified = True
-                self._renderer.render()
+                renderer = self.renderer
+                if renderer:
+                    renderer.render()
                 self._update_tab_title()
                 logger.info("Updated text content")
             return
@@ -1569,8 +1588,9 @@ class MainWindow(QMainWindow):
                 wire.sel = SelectionState.SELECTED
                 count += 1
 
-        if self._renderer:
-            self._renderer.render()
+        renderer = self.renderer
+        if renderer:
+            renderer.render()
         self.statusBar().showMessage(f"Highlighted {count} wires on {len(nets_to_highlight)} net(s)", 3000)
         logger.info("Highlighted %d wires on nets: %s", count, nets_to_highlight)
 
@@ -1618,8 +1638,9 @@ class MainWindow(QMainWindow):
                 if self.canvas:
                     self.canvas.center_on_point(QPointF(text.x0, text.y0))
 
-            if self._renderer:
-                self._renderer.render()
+            renderer = self.renderer
+            if renderer:
+                renderer.render()
 
         dialog.goto_result.connect(goto_result)
         dialog.exec()
@@ -1686,8 +1707,9 @@ class MainWindow(QMainWindow):
             self._context.schprop = sub_ctx.schprop
             self._context.sym_prop = sub_ctx.sym_prop
 
-            if self._renderer:
-                self._renderer.render()
+            renderer = self.renderer
+            if renderer:
+                renderer.render()
             self._update_window_title()
             self.statusBar().showMessage(f"Descended into {inst_path}", 3000)
             logger.info("Descended into '%s' (depth=%d)", resolved, self._context.hierarchy_depth)
@@ -1756,8 +1778,9 @@ class MainWindow(QMainWindow):
                 self._context.schprop = parent_ctx.schprop
                 self._context.sym_prop = parent_ctx.sym_prop
 
-                if self._renderer:
-                    self._renderer.render()
+                renderer = self.renderer
+                if renderer:
+                    renderer.render()
                 self._update_window_title()
                 self.statusBar().showMessage(f"Returned to {self._context.filename}", 3000)
                 logger.info("Returned to '%s' (depth=%d)", parent_path, self._context.hierarchy_depth)
@@ -1921,7 +1944,9 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self) -> None:
         """Handle selection change from canvas."""
-        # TODO: Update property panel
+        canvas = self.canvas
+        if canvas:
+            canvas.sync_selection_to_context()
         self.selection_changed.emit([])
         logger.debug("Selection changed in canvas")
 
@@ -1969,9 +1994,11 @@ class MainWindow(QMainWindow):
 
         # Escape key cancels current operation
         if key == Qt.Key_Escape:
+            # Cancel any active drawing mode on the current canvas
             dc = self.drawing_controller
             if dc and dc.is_drawing:
                 dc.cancel()
+                logger.info("Escape: canceled drawing mode from MainWindow")
             if self._context:
                 self._context.ui_state = UIState.NONE
             self.deselect_all()
@@ -1979,7 +2006,6 @@ class MainWindow(QMainWindow):
             self.statusBar().clearMessage()
             self._status_setup.update_mode(self._netlist_mode_name())
             event.accept()
-            logger.debug("Escape pressed: cleared UI state and selection")
             return
 
         super().keyPressEvent(event)
