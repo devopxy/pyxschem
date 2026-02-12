@@ -14,6 +14,7 @@ from pyxschem.ui.toolbar import ToolBarSetup
 from pyxschem.ui.statusbar import StatusBarSetup
 from pyxschem.ui.drawing_controller import DrawingController, DrawingMode
 from pyxschem.ui.edit_controller import EditController
+from pyxschem.ui.command_manager import CommandManager, CommandState
 from pyxschem.ui.widgets import TerminalConsoleDock
 
 __all__ = [
@@ -24,5 +25,7 @@ __all__ = [
     "DrawingController",
     "DrawingMode",
     "EditController",
+    "CommandManager",
+    "CommandState",
     "TerminalConsoleDock",
 ]

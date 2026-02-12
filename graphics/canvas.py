@@ -23,6 +23,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QGraphicsView,
     QGraphicsScene,
+    QGraphicsItem,
     QGraphicsRectItem,
     QRubberBand,
 )
@@ -111,6 +112,10 @@ class SchematicCanvas(QGraphicsView):
         self._rubber_band: Optional[QRubberBand] = None
         self._selection_start = QPointF()
         self._selecting = False
+        self._dragging_selection = False
+        self._drag_start_scene = QPointF()
+        self._drag_applied_dx = 0.0
+        self._drag_applied_dy = 0.0
 
         # Configure view
         self._setup_view()
@@ -362,6 +367,18 @@ class SchematicCanvas(QGraphicsView):
                     event.accept()
                     return
             else:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                # LTspice-like behavior: dragging an already selected object moves selection.
+                for item in self._scene.items(scene_pos):
+                    if item.flags() & QGraphicsItem.ItemIsSelectable and item.isSelected():
+                        self._dragging_selection = True
+                        self._drag_start_scene = scene_pos
+                        self._drag_applied_dx = 0.0
+                        self._drag_applied_dy = 0.0
+                        self.setCursor(Qt.ClosedHandCursor)
+                        event.accept()
+                        logger.debug("Selection drag started")
+                        return
                 # Start rubber-band selection
                 self._selection_start = event.position()
                 self._selecting = True
@@ -394,6 +411,29 @@ class SchematicCanvas(QGraphicsView):
             self.translate(delta.x() / self._zoom, delta.y() / self._zoom)
             event.accept()
 
+        elif self._dragging_selection:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            raw_dx = scene_pos.x() - self._drag_start_scene.x()
+            raw_dy = scene_pos.y() - self._drag_start_scene.y()
+
+            if self._snap_to_grid:
+                snap = self._snap_spacing
+                target_dx = round(raw_dx / snap) * snap
+                target_dy = round(raw_dy / snap) * snap
+            else:
+                target_dx = raw_dx
+                target_dy = raw_dy
+
+            step_dx = target_dx - self._drag_applied_dx
+            step_dy = target_dy - self._drag_applied_dy
+            if abs(step_dx) > 1e-9 or abs(step_dy) > 1e-9:
+                ec = getattr(self, "_edit_controller", None)
+                if ec is not None:
+                    ec.move(step_dx, step_dy)
+                self._drag_applied_dx = target_dx
+                self._drag_applied_dy = target_dy
+            event.accept()
+
         elif (hasattr(self, '_drawing_controller') and self._drawing_controller
               and self._drawing_controller.is_drawing):
             # Delegate to drawing controller for rubber-band preview
@@ -415,7 +455,15 @@ class SchematicCanvas(QGraphicsView):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         """Handle mouse release for pan and selection."""
-        if self._panning:
+        if self._dragging_selection:
+            self._dragging_selection = False
+            self.setCursor(Qt.ArrowCursor)
+            self.sync_selection_to_context()
+            self.selection_changed.emit()
+            event.accept()
+            logger.debug("Selection drag ended (dx=%.1f, dy=%.1f)", self._drag_applied_dx, self._drag_applied_dy)
+
+        elif self._panning:
             self._panning = False
             self.setCursor(Qt.ArrowCursor)
             event.accept()
@@ -440,7 +488,7 @@ class SchematicCanvas(QGraphicsView):
 
                 items = self._scene.items(scene_pos)
                 for item in items:
-                    if item.flags() & item.ItemIsSelectable:
+                    if item.flags() & QGraphicsItem.ItemIsSelectable:
                         if event.modifiers() & Qt.ShiftModifier:
                             item.setSelected(not item.isSelected())
                         else:
@@ -459,7 +507,7 @@ class SchematicCanvas(QGraphicsView):
 
                 items = self._scene.items(scene_rect, Qt.IntersectsItemShape)
                 for item in items:
-                    if item.flags() & item.ItemIsSelectable:
+                    if item.flags() & QGraphicsItem.ItemIsSelectable:
                         item.setSelected(True)
 
             self.sync_selection_to_context()
@@ -505,16 +553,21 @@ class SchematicCanvas(QGraphicsView):
             event.accept()
 
         elif key == Qt.Key_Escape:
-            # Cancel any active drawing mode first
+            # Route through MainWindow command manager when available so tool
+            # mode, status, and selection state stay synchronized.
+            manager = getattr(self.window(), "command_manager", None)
+            if manager is not None and manager.dispatch_command("escape"):
+                event.accept()
+                return
+
+            # Fallback path for standalone canvas use in tests/tools.
             if (hasattr(self, '_drawing_controller') and self._drawing_controller
                     and self._drawing_controller.is_drawing):
                 self._drawing_controller.cancel()
-            # Clear scene selection
             self._scene.clearSelection()
             self.sync_selection_to_context()
             self.selection_changed.emit()
-            # Don't accept — let MainWindow also handle for UIState/status cleanup
-            event.ignore()
+            event.accept()
 
         else:
             super().keyPressEvent(event)
@@ -611,7 +664,7 @@ class SchematicCanvas(QGraphicsView):
     def select_all(self) -> None:
         """Select all selectable items."""
         for item in self._scene.items():
-            if item.flags() & item.ItemIsSelectable:
+            if item.flags() & QGraphicsItem.ItemIsSelectable:
                 item.setSelected(True)
         self.selection_changed.emit()
 

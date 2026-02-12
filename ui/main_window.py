@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QMenu,
 )
-from PySide6.QtGui import QCloseEvent, QAction
+from PySide6.QtGui import QCloseEvent, QAction, QShortcut, QKeySequence
 
 from pyxschem.automation import ScriptAutomationRunner
 from pyxschem.config import JsonConfigManager
@@ -41,6 +41,7 @@ from pyxschem.ui.theme import apply_editor_theme, is_dark_theme
 from pyxschem.ui.widgets import TerminalConsoleDock
 from pyxschem.ui.edit_controller import EditController
 from pyxschem.ui.drawing_controller import DrawingController
+from pyxschem.ui.command_manager import CommandManager
 
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ class MainWindow(QMainWindow):
         self._setup_dock_widgets()
         self._setup_menu_bar()
         self._setup_status_bar()
+        self._setup_command_manager()
 
         # Load settings
         self._load_settings()
@@ -170,6 +172,19 @@ class MainWindow(QMainWindow):
         """Set up the status bar."""
         self._status_setup = StatusBarSetup(self)
         self._status_setup.setup_status_bar()
+
+    def _setup_command_manager(self) -> None:
+        """Set up centralized keyboard command state manager."""
+        self._command_manager = CommandManager(self)
+        self._escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._escape_shortcut.activated.connect(self._dispatch_escape_shortcut)
+
+    @Slot()
+    def _dispatch_escape_shortcut(self) -> None:
+        """Fallback Escape dispatch when key events bypass regular filter path."""
+        if hasattr(self, "_command_manager"):
+            self._command_manager.dispatch_command("escape")
 
     def _setup_dock_widgets(self) -> None:
         """Set up dock widgets for panels."""
@@ -357,9 +372,12 @@ class MainWindow(QMainWindow):
             )
 
         if hasattr(self, "_menu_setup"):
-            self._menu_setup.update_grid_action(self._show_grid)
-            self._menu_setup.update_snap_action(self._snap_to_grid)
-            self._menu_setup.update_theme_actions(self._ui_theme)
+            try:
+                self._menu_setup.update_grid_action(self._show_grid)
+                self._menu_setup.update_snap_action(self._snap_to_grid)
+                self._menu_setup.update_theme_actions(self._ui_theme)
+            except RuntimeError:
+                logger.exception("Menu action sync skipped due stale/deleted QAction")
 
         if hasattr(self, "_workflow_dock"):
             self._workflow_dock.setVisible(
@@ -481,11 +499,35 @@ class MainWindow(QMainWindow):
         else:
             self._toolbar_setup.clear_active_tool()
 
+    def _set_command_state(self, command_name: str | None) -> None:
+        """Synchronize command manager state with UI-triggered tool changes."""
+        if not hasattr(self, "_command_manager"):
+            return
+        if command_name:
+            self._command_manager.set_active_command(command_name)
+        else:
+            self._command_manager.set_idle()
+
     def _clear_active_tool(self) -> None:
         """Reset active tool indicators to the default pointer/select mode."""
         self._current_tool_name = "Select"
         self._status_setup.update_tool(self._current_tool_name)
         self._toolbar_setup.clear_active_tool()
+        self._toolbar_setup.set_active_tool("select")
+        self._set_command_state(None)
+
+    @Slot()
+    def select_mode(self) -> None:
+        """Return editor to default selection/drag mode."""
+        dc = self.drawing_controller
+        if dc and dc.is_drawing:
+            dc.cancel()
+        if self._context:
+            self._context.ui_state = UIState.NONE
+        self._set_active_tool("Select", "select")
+        self._set_command_state(None)
+        self.statusBar().showMessage("Selection mode", 1500)
+        logger.info("Selection mode activated")
 
     def _has_simulation_profile(self) -> bool:
         """Detect if the active schematic contains simulation directives."""
@@ -594,6 +636,91 @@ class MainWindow(QMainWindow):
         """Open generated netlist view (placeholder)."""
         self.statusBar().showMessage("Generated netlist view not yet implemented", 2400)
         logger.warning("View netlist requested but not implemented")
+
+    @Slot()
+    def check_and_save(self) -> None:
+        """Run validity checks then save, mirroring Shift+X flow."""
+        self.run_erc_drc()
+        if self.save_file():
+            self.statusBar().showMessage("Check-and-save completed", 2200)
+            logger.info("Check-and-save completed")
+
+    @Slot()
+    def create_ruler(self) -> None:
+        """Create a temporary ruler overlay (placeholder)."""
+        self._set_active_tool("Ruler")
+        self.statusBar().showMessage("Ruler tool selected (implementation pending)", 2200)
+        logger.warning("Create ruler requested but implementation is pending")
+
+    @Slot()
+    def clear_all_rulers(self) -> None:
+        """Clear all temporary ruler overlays (placeholder)."""
+        self.statusBar().showMessage("Rulers cleared (implementation pending)", 2000)
+        logger.warning("Clear all rulers requested but implementation is pending")
+
+    @Slot()
+    def instantiate_component(self) -> None:
+        """Virtuoso-compatible alias for component instantiation."""
+        self.place_symbol()
+
+    @Slot()
+    def start_bus(self) -> None:
+        """Start wide-wire bus routing mode (placeholder)."""
+        self.start_wire()
+        self._set_active_tool("Bus")
+        self._set_command_state("start_bus")
+        self.statusBar().showMessage("Bus routing selected (wide-wire backend pending)", 2200)
+        logger.warning("Bus routing requested but implementation is pending")
+
+    @Slot()
+    def create_label(self) -> None:
+        """Virtuoso-compatible alias for net label creation."""
+        self.place_net_label()
+
+    @Slot()
+    def create_pin(self) -> None:
+        """Create schematic IO pin (placeholder)."""
+        self._set_active_tool("Pin")
+        self._set_command_state("create_pin")
+        self.statusBar().showMessage("Pin creation selected (implementation pending)", 2200)
+        logger.warning("Create pin requested but implementation is pending")
+
+    @Slot()
+    def open_properties(self) -> None:
+        """Virtuoso-compatible alias for property editor."""
+        self.edit_properties()
+
+    @Slot()
+    def open_wire_options(self) -> None:
+        """Open contextual wire options dialog (placeholder)."""
+        self.statusBar().showMessage("Wire options dialog not yet implemented", 2200)
+        logger.warning("Wire options requested but not implemented")
+
+    @Slot()
+    def open_transform_options(self) -> None:
+        """Open contextual transform options dialog (placeholder)."""
+        self.statusBar().showMessage("Transform options dialog not yet implemented", 2200)
+        logger.warning("Transform options requested but not implemented")
+
+    @Slot(str)
+    def open_command_options(self, command_name: str) -> None:
+        """Open command-specific options when F3 has no dedicated handler."""
+        self.statusBar().showMessage(f"No options dialog for '{command_name}'", 2200)
+        logger.info("No options dialog registered for command '%s'", command_name)
+
+    @Slot(str)
+    def descend_hierarchy(self, mode: str = "READ") -> None:
+        """Descend hierarchy in-place, preserving Virtuoso-style view stack flow."""
+        mode = (mode or "READ").upper()
+        if mode == "EDIT":
+            self.statusBar().showMessage("Hierarchy edit mode requested", 1600)
+            logger.info("Descend hierarchy requested in EDIT mode")
+        self.descend_schematic()
+
+    @Slot()
+    def ascend_hierarchy(self) -> None:
+        """Ascend one hierarchy level in-place."""
+        self.go_back()
 
     @Slot()
     def open_documentation(self) -> None:
@@ -857,6 +984,37 @@ class MainWindow(QMainWindow):
         """Return terminal/debug dock widget."""
         return getattr(self, "_terminal_console_dock", None)
 
+    @property
+    def command_manager(self) -> CommandManager:
+        """Return centralized keyboard command manager."""
+        return self._command_manager
+
+    def has_selection_buffer(self) -> bool:
+        """Return whether current context has selected objects."""
+        ec = self.edit_controller
+        return bool(ec and ec.has_selection())
+
+    def clear_selection_buffer(self) -> None:
+        """Clear selection buffer while keeping editor in IDLE state."""
+        self.deselect_all()
+        if self._context:
+            self._context.ui_state = UIState.NONE
+        self._clear_active_tool()
+        self.statusBar().clearMessage()
+        self._status_setup.update_mode(self._netlist_mode_name())
+
+    def abort_active_command(self, command_name: str | None = None) -> None:
+        """Abort currently-active command operation without clearing selection."""
+        dc = self.drawing_controller
+        if dc and dc.is_drawing:
+            dc.cancel()
+            logger.info("Aborted active drawing command '%s'", command_name or "unknown")
+        if self._context:
+            self._context.ui_state = UIState.NONE
+        self._clear_active_tool()
+        self.statusBar().clearMessage()
+        self._status_setup.update_mode(self._netlist_mode_name())
+
     def _find_menu_by_title(self, menu_name: str) -> Optional[QMenu]:
         """Find an existing top-level menu by title (ignoring ampersands)."""
         normalized = menu_name.replace("&", "").strip().lower()
@@ -887,10 +1045,35 @@ class MainWindow(QMainWindow):
         action = menu.addAction(label)
         action.triggered.connect(callback)
         if shortcut:
-            action.setShortcut(shortcut)
+            if self._is_reserved_menu_shortcut(shortcut):
+                logger.warning(
+                    "Skipping reserved shortcut '%s' for plugin menu action '%s'",
+                    shortcut,
+                    label,
+                )
+            else:
+                action.setShortcut(shortcut)
 
         self._plugin_menu_actions.append(action)
         return action
+
+    def _is_reserved_menu_shortcut(self, shortcut: str) -> bool:
+        """Return True if a shortcut is reserved for global command routing."""
+        menu_cfg = self._config_manager.section("menus")
+        reserved = menu_cfg.get("reserved_shortcuts", ["Esc", "Escape"])
+        reserved_set = {"esc", "escape"}
+        if isinstance(reserved, list):
+            for entry in reserved:
+                if isinstance(entry, str) and entry.strip():
+                    reserved_set.add(entry.strip().lower())
+
+        normalized = shortcut.strip().lower()
+        if not normalized:
+            return False
+        if normalized in reserved_set:
+            return True
+        portable = QKeySequence(shortcut).toString(QKeySequence.PortableText).strip().lower()
+        return bool(portable and portable in reserved_set)
 
     def clear_plugin_menu_actions(self) -> None:
         """Remove previously-registered plugin menu actions and menus."""
@@ -961,6 +1144,8 @@ class MainWindow(QMainWindow):
         self._has_wave_results = False
         self._simulation_running = False
         self._clear_active_tool()
+        if hasattr(self, "_command_manager"):
+            self._command_manager.set_idle()
         self.schematic_changed.emit(context)
         self._update_window_title()
         self._status_setup.update_file(context.filename, context.modified)
@@ -1185,6 +1370,7 @@ class MainWindow(QMainWindow):
             dc.start_zoom_box()
             self.statusBar().showMessage("Click to start zoom box, click to finish")
             self._set_active_tool("Zoom Box")
+            self._set_command_state("zoom_box")
 
     @Slot()
     def toggle_grid(self) -> None:
@@ -1316,16 +1502,45 @@ class MainWindow(QMainWindow):
     @Slot()
     def move_selected(self) -> None:
         """Start interactive move of selected objects."""
+        self.start_move_command()
+
+    @Slot()
+    def start_move_command(self) -> bool:
+        """Start move command for noun-verb / verb-noun flows."""
         ec = self.edit_controller
         dc = self.drawing_controller
         if ec and dc:
             if not ec.has_selection():
-                self.statusBar().showMessage("Nothing selected to move", 2000)
-                return
+                self.statusBar().showMessage("Move armed (verb-noun): select object and retry click flow", 2200)
+                logger.info("Move command armed in verb-noun placeholder mode")
+                self._set_command_state("move")
+                return False
             dc.start_move()
             self.statusBar().showMessage("Click reference point, then click destination")
             self._set_active_tool("Move")
+            self._set_command_state("move")
             logger.info("Interactive move started")
+            return True
+        return False
+
+    @Slot()
+    def start_copy_command(self) -> bool:
+        """Start interactive copy command with floating preview."""
+        ec = self.edit_controller
+        dc = self.drawing_controller
+        if ec and dc:
+            if not ec.has_selection():
+                self.statusBar().showMessage("Copy armed (verb-noun): select object and retry click flow", 2200)
+                logger.info("Copy command armed in verb-noun placeholder mode")
+                self._set_command_state("copy")
+                return False
+            dc.start_copy_mode()
+            self.statusBar().showMessage("Click reference point, then click copy destination")
+            self._set_active_tool("Copy")
+            self._set_command_state("copy")
+            logger.info("Interactive copy started")
+            return True
+        return False
 
     @Slot()
     def rotate_selected(self) -> None:
@@ -1363,6 +1578,7 @@ class MainWindow(QMainWindow):
             dc.start_wire()
             self.statusBar().showMessage("Click to start wire, click to add points, double-click to finish")
             self._set_active_tool("Wire", "wire")
+            self._set_command_state("start_wire")
 
     @Slot()
     def start_line(self) -> None:
@@ -1372,6 +1588,7 @@ class MainWindow(QMainWindow):
             dc.start_line()
             self.statusBar().showMessage("Click to start line, click to end")
             self._set_active_tool("Line")
+            self._set_command_state("start_line")
 
     @Slot()
     def start_rect(self) -> None:
@@ -1381,6 +1598,7 @@ class MainWindow(QMainWindow):
             dc.start_rect()
             self.statusBar().showMessage("Click to start rectangle, click to set opposite corner")
             self._set_active_tool("Rectangle")
+            self._set_command_state("start_rect")
 
     @Slot()
     def start_arc(self) -> None:
@@ -1390,6 +1608,7 @@ class MainWindow(QMainWindow):
             dc.start_arc()
             self.statusBar().showMessage("Click to set center, drag to set radius")
             self._set_active_tool("Arc")
+            self._set_command_state("start_arc")
 
     @Slot()
     def start_polygon(self) -> None:
@@ -1399,6 +1618,7 @@ class MainWindow(QMainWindow):
             dc.start_polygon()
             self.statusBar().showMessage("Click to add points, double-click to finish")
             self._set_active_tool("Polygon")
+            self._set_command_state("start_polygon")
 
     @Slot()
     def start_text(self) -> None:
@@ -1408,6 +1628,7 @@ class MainWindow(QMainWindow):
             dc.start_text()
             self.statusBar().showMessage("Click to place text")
             self._set_active_tool("Text", "text")
+            self._set_command_state("start_text")
 
     @Slot()
     def place_symbol(self) -> None:
@@ -1428,6 +1649,7 @@ class MainWindow(QMainWindow):
                     dc.start_symbol(symbol_path)
                 self.statusBar().showMessage(f"Click to place {symbol_path}")
                 self._set_active_tool("Component", "component")
+                self._set_command_state("instantiate_component")
                 logger.info("Symbol selected for placement: %s", symbol_path)
                 return
 
@@ -1438,6 +1660,7 @@ class MainWindow(QMainWindow):
     def place_ground(self) -> None:
         """Place a ground symbol (placeholder until symbol backend binds tool)."""
         self._set_active_tool("Ground")
+        self._set_command_state("place_ground")
         self.statusBar().showMessage("Ground placement shortcut selected (implementation pending)", 2400)
         logger.warning("Place ground requested but implementation is pending")
 
@@ -1445,6 +1668,7 @@ class MainWindow(QMainWindow):
     def place_net_label(self) -> None:
         """Place a net label (placeholder until dedicated label tool is implemented)."""
         self._set_active_tool("Net Label")
+        self._set_command_state("create_label")
         self.statusBar().showMessage("Net label placement selected (implementation pending)", 2400)
         logger.warning("Place net label requested but implementation is pending")
 
@@ -1899,6 +2123,8 @@ class MainWindow(QMainWindow):
         if isinstance(canvas, SchematicCanvas) and hasattr(canvas, '_renderer'):
             self._context = canvas._renderer.context
             self._clear_active_tool()
+            if hasattr(self, "_command_manager"):
+                self._command_manager.set_idle()
             self.schematic_changed.emit(self._context)
             self._update_window_title()
             if self._context:
@@ -1983,29 +2209,15 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "_terminal_console_dock"):
             self._terminal_console_dock.detach_log_handler()
+        if hasattr(self, "_command_manager"):
+            self._command_manager.shutdown()
         self._plugin_manager.unload_plugins()
         self._save_settings()
         event.accept()
         logger.info("Window close accepted")
 
     def keyPressEvent(self, event) -> None:
-        """Handle key press events."""
-        key = event.key()
-
-        # Escape key cancels current operation
-        if key == Qt.Key_Escape:
-            # Cancel any active drawing mode on the current canvas
-            dc = self.drawing_controller
-            if dc and dc.is_drawing:
-                dc.cancel()
-                logger.info("Escape: canceled drawing mode from MainWindow")
-            if self._context:
-                self._context.ui_state = UIState.NONE
-            self.deselect_all()
-            self._clear_active_tool()
-            self.statusBar().clearMessage()
-            self._status_setup.update_mode(self._netlist_mode_name())
-            event.accept()
+        """Handle key presses via centralized command manager first."""
+        if hasattr(self, "_command_manager") and self._command_manager.handle_key_event(event):
             return
-
         super().keyPressEvent(event)

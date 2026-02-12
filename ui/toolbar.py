@@ -258,6 +258,11 @@ class ToolBarSetup:
             for x in (6, 10, 14):
                 for y in (6, 10, 14):
                     painter.drawPoint(QPointF(x, y))
+        elif name == "select":
+            painter.drawLine(5, 3, 5, 17)
+            painter.drawLine(5, 3, 14, 10)
+            painter.drawLine(14, 10, 10, 11)
+            painter.drawLine(10, 11, 12, 17)
         elif name == "wire":
             poly = QPolygonF([QPointF(4, 15), QPointF(9, 10), QPointF(14, 10), QPointF(18, 6)])
             painter.drawPolyline(poly)
@@ -456,6 +461,16 @@ class ToolBarSetup:
 
         toolbar.addAction(
             self._make_mode_action(
+                "select",
+                "Select",
+                "Select and move existing objects",
+                self._window.select_mode,
+                icon_name="select",
+                shortcut="V",
+            )
+        )
+        toolbar.addAction(
+            self._make_mode_action(
                 "wire",
                 "Wire",
                 "Draw wire / net",
@@ -472,26 +487,6 @@ class ToolBarSetup:
                 self._window.place_symbol,
                 icon_name="component",
                 shortcut="Ctrl+I",
-            )
-        )
-        toolbar.addAction(
-            self._make_action(
-                "ground",
-                "Ground",
-                "Place ground symbol",
-                self._window.place_ground,
-                icon_name="ground",
-                shortcut="G",
-            )
-        )
-        toolbar.addAction(
-            self._make_action(
-                "net_label",
-                "Net Label",
-                "Place net label",
-                self._window.place_net_label,
-                icon_name="net_label",
-                shortcut="A",
             )
         )
         toolbar.addAction(
